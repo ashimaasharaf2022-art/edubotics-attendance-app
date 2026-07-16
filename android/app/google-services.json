@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "410201815396",
+    "project_id": "edubotics-attendance",
+    "storage_bucket": "edubotics-attendance.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:410201815396:android:2c7271dcac9cd013f7e271",
+        "android_client_info": {
+          "package_name": "com.example.punchin_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC2vpbbv_OH6pd8O1aub5DKamypJXeLPMY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

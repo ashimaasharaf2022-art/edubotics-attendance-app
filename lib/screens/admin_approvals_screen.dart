@@ -1,0 +1,294 @@
+import 'package:flutter/material.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_database/firebase_database.dart';
+import 'dart:math';
+import '../utils/app_colors.dart';
+import '../utils/activity_logger.dart';
+import '../utils/notification_center.dart';
+
+class AdminApprovalsScreen extends StatefulWidget {
+  final String adminId;
+  final String adminName;
+
+  const AdminApprovalsScreen({
+    super.key,
+    required this.adminId,
+    required this.adminName,
+  });
+
+  @override
+  State<AdminApprovalsScreen> createState() => _AdminApprovalsScreenState();
+}
+
+class _AdminApprovalsScreenState extends State<AdminApprovalsScreen> {
+  late DatabaseReference dbRef;
+  bool showWfh = false;
+
+  @override
+  void initState() {
+    super.initState();
+    dbRef = FirebaseDatabase.instanceFor(
+      app: Firebase.app(),
+      databaseURL:
+          "https://edubotics-attendance-default-rtdb.asia-southeast1.firebasedatabase.app",
+    ).ref();
+  }
+
+  String _generateOtp() {
+    final rand = Random();
+    return (100000 + rand.nextInt(900000)).toString();
+  }
+
+  Future<void> _generateOtpFor(String employeeId, String requestId) async {
+    final otp = _generateOtp();
+    final expiry = DateTime.now().add(const Duration(minutes: 10));
+
+    await dbRef.child("DeviceApprovalRequests").child(employeeId).child(requestId).update({
+      "status": "otp_ready",
+      "otpCode": otp,
+      "otpExpiry": expiry.toIso8601String(),
+    });
+
+    await ActivityLogger.log(
+      adminId: widget.adminId,
+      adminName: widget.adminName,
+      action: "Generated Device OTP",
+      details: employeeId,
+    );
+
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text("OTP Generated"),
+        content: Text(
+          "Give this code to the employee (valid for 10 minutes):\n\n$otp",
+          style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text("Done")),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _rejectDevice(String employeeId, String requestId) async {
+    await dbRef.child("DeviceApprovalRequests").child(employeeId).child(requestId).update({"status": "rejected"});
+
+    await ActivityLogger.log(
+      adminId: widget.adminId,
+      adminName: widget.adminName,
+      action: "Rejected Device Login",
+      details: employeeId,
+    );
+
+    await NotificationCenter.send(
+      employeeId: employeeId,
+      title: "Device Login Rejected",
+      message: "Your new-device login request was rejected by the admin.",
+    );
+  }
+
+  Future<void> _reviewWfh(String employeeId, String dateKey, String decision) async {
+    await dbRef.child("WorkFromHomeRequests").child(employeeId).child(dateKey).update({"status": decision});
+
+    await ActivityLogger.log(
+      adminId: widget.adminId,
+      adminName: widget.adminName,
+      action: decision == "approved" ? "Approved WFH" : "Rejected WFH",
+      details: "$employeeId \u2014 $dateKey",
+    );
+
+    await NotificationCenter.send(
+      employeeId: employeeId,
+      title: decision == "approved" ? "Work From Home Approved" : "Work From Home Rejected",
+      message: "Your WFH request for $dateKey was $decision.",
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      appBar: AppBar(
+        backgroundColor: AppColors.primary,
+        title: const Text("Approvals", style: TextStyle(color: Colors.white)),
+      ),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: SegmentedButton<bool>(
+              segments: const [
+                ButtonSegment(value: false, label: Text("Device Logins")),
+                ButtonSegment(value: true, label: Text("Work From Home")),
+              ],
+              selected: {showWfh},
+              onSelectionChanged: (s) => setState(() => showWfh = s.first),
+              style: SegmentedButton.styleFrom(
+                selectedBackgroundColor: AppColors.primary,
+                selectedForegroundColor: Colors.white,
+              ),
+            ),
+          ),
+          Expanded(child: showWfh ? _buildWfhList() : _buildDeviceList()),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDeviceList() {
+    return StreamBuilder<DatabaseEvent>(
+      stream: dbRef.child("DeviceApprovalRequests").onValue,
+      builder: (context, snapshot) {
+        if (!snapshot.hasData || snapshot.data!.snapshot.value == null) {
+          return const Center(child: Text("No device login requests"));
+        }
+
+        final empMap = Map<dynamic, dynamic>.from(snapshot.data!.snapshot.value as Map);
+        final items = <Map<String, dynamic>>[];
+
+        empMap.forEach((empId, requestsMap) {
+          final requests = Map<dynamic, dynamic>.from(requestsMap as Map);
+          requests.forEach((requestId, value) {
+            final req = Map<dynamic, dynamic>.from(value as Map);
+            if (req["status"] == "pending" || req["status"] == "otp_ready") {
+              items.add({...req, "employeeId": empId, "requestId": requestId});
+            }
+          });
+        });
+
+        if (items.isEmpty) return const Center(child: Text("No pending device requests"));
+
+        return ListView.builder(
+          padding: const EdgeInsets.all(16),
+          itemCount: items.length,
+          itemBuilder: (context, index) {
+            final item = items[index];
+            final isOtpReady = item["status"] == "otp_ready";
+
+            return Container(
+              margin: const EdgeInsets.only(bottom: 10),
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(14), boxShadow: AppShadows.card),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text("${item["employeeName"]} (${item["employeeId"]})", style: const TextStyle(fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 4),
+                  Text("Device: ${item["deviceModel"]}", style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+                  if (isOtpReady) ...[
+                    const SizedBox(height: 6),
+                    Text("OTP: ${item["otpCode"]}", style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold)),
+                  ],
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          style: OutlinedButton.styleFrom(foregroundColor: AppColors.danger),
+                          onPressed: () => _rejectDevice(item["employeeId"], item["requestId"]),
+                          child: const Text("Reject"),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: ElevatedButton(
+                          style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
+                          onPressed: () => _generateOtpFor(item["employeeId"], item["requestId"]),
+                          child: Text(isOtpReady ? "Regenerate OTP" : "Generate OTP", style: const TextStyle(color: Colors.white)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildWfhList() {
+    return StreamBuilder<DatabaseEvent>(
+      stream: dbRef.child("WorkFromHomeRequests").onValue,
+      builder: (context, snapshot) {
+        if (!snapshot.hasData || snapshot.data!.snapshot.value == null) {
+          return const Center(child: Text("No WFH requests"));
+        }
+
+        final empMap = Map<dynamic, dynamic>.from(snapshot.data!.snapshot.value as Map);
+        final items = <Map<String, dynamic>>[];
+
+        empMap.forEach((empId, datesMap) {
+          final dates = Map<dynamic, dynamic>.from(datesMap as Map);
+          dates.forEach((dateKey, value) {
+            final req = Map<dynamic, dynamic>.from(value as Map);
+            if (req["status"] == "pending") {
+              items.add({...req, "employeeId": empId, "dateKey": dateKey});
+            }
+          });
+        });
+
+        if (items.isEmpty) return const Center(child: Text("No pending WFH requests"));
+
+        return ListView.builder(
+          padding: const EdgeInsets.all(16),
+          itemCount: items.length,
+          itemBuilder: (context, index) {
+            final item = items[index];
+            return Container(
+              margin: const EdgeInsets.only(bottom: 10),
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(14), boxShadow: AppShadows.card),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text("${item["employeeName"] ?? item["employeeId"]}", style: const TextStyle(fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 4),
+                  Text("Date: ${item["dateKey"]}", style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+                  if (item["address"] != null) ...[
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        const Icon(Icons.location_on, size: 14, color: AppColors.primary),
+                        const SizedBox(width: 4),
+                        Expanded(
+                          child: Text(
+                            item["address"].toString(),
+                            style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          style: OutlinedButton.styleFrom(foregroundColor: AppColors.danger),
+                          onPressed: () => _reviewWfh(item["employeeId"], item["dateKey"], "rejected"),
+                          child: const Text("Reject"),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: ElevatedButton(
+                          style: ElevatedButton.styleFrom(backgroundColor: AppColors.success),
+                          onPressed: () => _reviewWfh(item["employeeId"], item["dateKey"], "approved"),
+                          child: const Text("Approve", style: TextStyle(color: Colors.white)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+}
