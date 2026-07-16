@@ -4,8 +4,9 @@ import 'package:firebase_database/firebase_database.dart';
 import 'package:intl/intl.dart';
 import '../utils/leave_constants.dart';
 import '../utils/app_colors.dart';
-import 'apply_leave_screen.dart';
+import '../utils/notification_center.dart';
 import '../utils/email_alert_helper.dart';
+import 'apply_leave_screen.dart';
 
 class LeaveScreen extends StatefulWidget {
   final String employeeId;
@@ -114,50 +115,59 @@ class _LeaveScreenState extends State<LeaveScreen> {
   }
 
   Future<void> _submitLeaveRequest({
-  required String leaveType,
-  required DateTime fromDate,
-  required DateTime toDate,
-  required int numberOfDays,
-  required String reason,
-}) async {
-  try {
-    final requestRef = dbRef.child("LeaveRequests").child(widget.employeeId).push();
+    required String leaveType,
+    required DateTime fromDate,
+    required DateTime toDate,
+    required int numberOfDays,
+    required String reason,
+  }) async {
+    try {
+      final requestRef = dbRef.child("LeaveRequests").child(widget.employeeId).push();
 
-    await requestRef.set({
-      "employeeId": widget.employeeId,
-      "employeeName": widget.employeeName,
-      "leaveType": leaveType,
-      "fromDate": DateFormat("yyyy-MM-dd").format(fromDate),
-      "toDate": DateFormat("yyyy-MM-dd").format(toDate),
-      "numberOfDays": numberOfDays,
-      "reason": reason,
-      "status": "pending",
-      "appliedOn": DateFormat("yyyy-MM-dd").format(DateTime.now()),
-    });
+      await requestRef.set({
+        "employeeId": widget.employeeId,
+        "employeeName": widget.employeeName,
+        "leaveType": leaveType,
+        "fromDate": DateFormat("yyyy-MM-dd").format(fromDate),
+        "toDate": DateFormat("yyyy-MM-dd").format(toDate),
+        "numberOfDays": numberOfDays,
+        "reason": reason,
+        "status": "pending",
+        "appliedOn": DateFormat("yyyy-MM-dd").format(DateTime.now()),
+      });
 
-    await EmailAlertHelper.sendAlert(
-      subject: "New Leave Request \u2014 ${widget.employeeName}",
-      message:
-          "${widget.employeeName} (${widget.employeeId}) has requested "
-          "${LeaveConstants.displayName(leaveType)} from "
-          "${DateFormat("dd MMM yyyy").format(fromDate)} to "
-          "${DateFormat("dd MMM yyyy").format(toDate)} ($numberOfDays day(s)).\n\n"
-          "Reason: $reason\n\n"
-          "Open the app to approve or reject this request.",
-    );
+      await NotificationCenter.sendAdmin(
+        title: "New Leave Request",
+        message:
+            "${widget.employeeName} has requested ${LeaveConstants.displayName(leaveType)} "
+            "from ${DateFormat("dd MMM yyyy").format(fromDate)} to ${DateFormat("dd MMM yyyy").format(toDate)}.",
+      );
 
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text("Leave request submitted")),
-    );
-    _loadData();
-  } catch (e) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("Error : $e")),
-    );
+      await EmailAlertHelper.sendAlert(
+        templateId: EmailAlertHelper.templateLeaveRequest,
+        subject: "New Leave Request \u2014 ${widget.employeeName}",
+        message:
+            "${widget.employeeName} (${widget.employeeId}) has requested "
+            "${LeaveConstants.displayName(leaveType)} from "
+            "${DateFormat("dd MMM yyyy").format(fromDate)} to "
+            "${DateFormat("dd MMM yyyy").format(toDate)} ($numberOfDays day(s)).\n\n"
+            "Reason: $reason\n\n"
+            "Open the app to approve or reject this request.",
+      );
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Leave request submitted")),
+      );
+      _loadData();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Error : $e")),
+      );
+    }
   }
-}
+
   Future<void> _cancelRequest(String requestId) async {
     final confirm = await showDialog<bool>(
       context: context,
@@ -174,6 +184,12 @@ class _LeaveScreenState extends State<LeaveScreen> {
 
     try {
       await dbRef.child("LeaveRequests").child(widget.employeeId).child(requestId).remove();
+
+      await NotificationCenter.sendAdmin(
+        title: "Leave Request Cancelled",
+        message: "${widget.employeeName} cancelled their pending leave request.",
+      );
+
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Request cancelled")));
       _loadData();

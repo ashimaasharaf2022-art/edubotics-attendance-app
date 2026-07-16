@@ -170,8 +170,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     int full = 0, half = 0, absent = 0;
 
-    // Every calendar day counts as a working day \u2014 no weekends
-    // or holidays are excluded from this calculation.
     for (DateTime d = monthStart; !d.isAfter(lastDay); d = d.add(const Duration(days: 1))) {
       final key = getDateKey(d);
       final record = allAttendance[key];
@@ -235,8 +233,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       return;
     }
 
-    // Make sure we have a fresh location fix to attach to the request
-    // so the admin can see where the employee is asking to work from.
     if (currentLocation == null) {
       await _refreshLocation();
     }
@@ -252,11 +248,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
       if (location != null) "address": location.address,
     });
 
+    await NotificationCenter.sendAdmin(
+      title: "Work From Home Request",
+      message: "$employeeName has requested to work from home today ($date).",
+    );
+
     if (!mounted) return;
     setState(() => wfhStatusToday = "pending");
   }
 
-  Future<bool> _passesIntegrityChecks({required bool bypassGeofence}) async {
+  Future<bool> _passesIntegrityChecks() async {
     if (locationStatus == LocationStatus.mockDetected) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Mock location detected. Disable fake GPS apps to check in.")),
@@ -289,7 +290,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
 
     setState(() => isSubmitting = true);
-    if (!await _passesIntegrityChecks(bypassGeofence: bypassGeofence)) {
+    if (!await _passesIntegrityChecks()) {
       setState(() => isSubmitting = false);
       return;
     }
@@ -333,6 +334,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
         status = "Checked In";
         isSubmitting = false;
       });
+
+      await NotificationCenter.sendAdmin(
+        title: "Employee Checked In",
+        message: "$employeeName checked in at $time${bypassGeofence ? ' (Work From Home)' : ''}.",
+      );
     } catch (e) {
       if (!mounted) return;
       setState(() => isSubmitting = false);
@@ -352,7 +358,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
 
     setState(() => isSubmitting = true);
-    if (!await _passesIntegrityChecks(bypassGeofence: bypassGeofence)) {
+    if (!await _passesIntegrityChecks()) {
       setState(() => isSubmitting = false);
       return;
     }
@@ -394,6 +400,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
         isSubmitting = false;
       });
       _loadMonthlyAttendance();
+
+      await NotificationCenter.sendAdmin(
+        title: "Employee Checked Out",
+        message: "$employeeName checked out at $time.",
+      );
     } catch (e) {
       if (!mounted) return;
       setState(() => isSubmitting = false);

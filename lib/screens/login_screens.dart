@@ -4,6 +4,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_database/firebase_database.dart';
 import '../utils/session_manager.dart';
 import '../utils/device_helper.dart';
+import '../utils/notification_center.dart';
 import '../utils/email_alert_helper.dart';
 import 'employee_shell.dart';
 import 'admin_shell.dart';
@@ -78,9 +79,8 @@ class _LoginScreenState extends State<LoginScreen> {
 
       String role = user["role"].toString().toLowerCase();
       String? name = user["name"]?.toString();
-     
-
       String? registeredDeviceId = user["registeredDeviceId"]?.toString();
+
       final currentDeviceId = await DeviceHelper.getDeviceId();
 
       if (registeredDeviceId == null) {
@@ -103,7 +103,13 @@ class _LoginScreenState extends State<LoginScreen> {
           "requestedAt": DateTime.now().toIso8601String(),
         });
 
+        await NotificationCenter.sendAdmin(
+          title: "New Device Login Request",
+          message: "${name ?? empId} is trying to log in from a new device: $deviceModel.",
+        );
+
         await EmailAlertHelper.sendAlert(
+          templateId: EmailAlertHelper.templateDeviceLogin,
           subject: "New Device Login Request \u2014 ${name ?? empId}",
           message:
               "${name ?? empId} ($empId) is trying to log in from a new device: $deviceModel.\n\nOpen the app to generate an OTP for them.",
@@ -136,27 +142,24 @@ class _LoginScreenState extends State<LoginScreen> {
       setState(() => isLoggingIn = false);
 
       if (role == "superadmin") {
-  Navigator.pushReplacement(
-    context,
-    MaterialPageRoute(
-      builder: (_) => AdminShell(
-        employeeId: empId,
-        employeeName: name,
-        isSuperAdmin: true,
-      ),
-    ),
-  );
-} else {
-  // Everyone else is an employee \u2014 always lands on their own
-  // dashboard. Admin access (if granted) is a switch inside
-  // Settings, not a separate login destination.
-  Navigator.pushReplacement(
-    context,
-    MaterialPageRoute(
-      builder: (_) => EmployeeShell(employeeId: empId),
-    ),
-  );
-}
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (_) => AdminShell(
+              employeeId: empId,
+              employeeName: name,
+              isSuperAdmin: true,
+            ),
+          ),
+        );
+      } else {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (_) => EmployeeShell(employeeId: empId),
+          ),
+        );
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() => isLoggingIn = false);
