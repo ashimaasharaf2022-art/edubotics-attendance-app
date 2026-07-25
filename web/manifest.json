@@ -1,11 +1,11 @@
 {
-    "name": "punchin_app",
-    "short_name": "punchin_app",
+    "name": "Workora",
+    "short_name": "Workora",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#FFFFFF",
+    "theme_color": "#2563EB",
+    "description": "Workora attendance management.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

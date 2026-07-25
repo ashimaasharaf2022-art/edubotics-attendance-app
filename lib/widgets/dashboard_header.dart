@@ -30,7 +30,11 @@ class DashboardHeader extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: AppColors.surface,
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Colors.white, Color(0xFFF4F3FF)],
+        ),
         borderRadius: BorderRadius.circular(20),
         boxShadow: AppShadows.card,
       ),

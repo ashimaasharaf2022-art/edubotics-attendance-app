@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_database/firebase_database.dart';
+import 'app_colors.dart';
 
 class ChangePasswordScreen extends StatefulWidget {
   final String employeeId;
@@ -107,7 +108,7 @@ class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        backgroundColor: const Color(0xFFF26C23),
+        backgroundColor: AppColors.primary,
         title: const Text("Change Password", style: TextStyle(color: Colors.white)),
       ),
       body: SingleChildScrollView(
@@ -160,7 +161,7 @@ class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
             SizedBox(
               height: 52,
               child: ElevatedButton(
-                style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFF26C23)),
+                style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
                 onPressed: isSaving ? null : _submit,
                 child: isSaving
                     ? const SizedBox(

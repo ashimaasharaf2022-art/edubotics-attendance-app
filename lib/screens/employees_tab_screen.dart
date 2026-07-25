@@ -6,6 +6,7 @@ import '../utils/activity_logger.dart';
 import 'add_employee_screen.dart';
 import 'profile_screen.dart';
 import 'history_screen.dart';
+import 'admin_attendance_editor_screen.dart';
 
 class EmployeesTabScreen extends StatefulWidget {
   final String adminId;
@@ -219,6 +220,11 @@ class _EmployeesTabScreenState extends State<EmployeesTabScreen> {
                           builder: (_) => HistoryScreen(employeeId: id, employeeName: name),
                         ),
                       );
+                    } else if (value == "attendance") {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => AdminAttendanceEditorScreen(adminId: widget.adminId, adminName: widget.adminName, employeeId: id, employeeName: name)),
+                      );
                     } else if (value == "delete") {
                       _confirmDelete(id, name);
                     }
@@ -231,6 +237,10 @@ class _EmployeesTabScreenState extends State<EmployeesTabScreen> {
                     PopupMenuItem(
                       value: "history",
                       child: Row(children: [Icon(Icons.history, size: 18), SizedBox(width: 8), Text("History")]),
+                    ),
+                    PopupMenuItem(
+                      value: "attendance",
+                      child: Row(children: [Icon(Icons.edit_calendar, size: 18), SizedBox(width: 8), Text("Edit Attendance")]),
                     ),
                     PopupMenuItem(
                       value: "delete",

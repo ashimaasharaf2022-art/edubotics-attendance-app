@@ -1,5 +1,5 @@
-name: punchin_app
-description: Attendance App
+name: workora
+description: Workora attendance app
 
 publish_to: 'none'
 
@@ -40,15 +40,18 @@ dev_dependencies:
     sdk: flutter
   flutter_launcher_icons: ^0.14.3
   flutter_lints: ^6.0.0
-  
+
 flutter_launcher_icons:
   android: true
   ios: false
-  image_path: "assets/images/logo.jpeg"
-  adaptive_icon_background: "#FFFFFF"
-  adaptive_icon_foreground: "assets/images/logo.jpeg"
+  image_path: "assets/images/workora_logo.png"
+  adaptive_icon_background: "#0B0F1F"
+  adaptive_icon_foreground: "assets/images/workora_logo.png"
+
 flutter:
   uses-material-design: true
 
   assets:
     - assets/images/logo.jpeg
+    - assets/images/workora_logo.png
+    - assets/icons/

@@ -12,7 +12,12 @@ class LanguageScreen extends StatefulWidget {
 class _LanguageScreenState extends State<LanguageScreen> {
   String selected = "English (India)";
 
-  static const options = ["English (India)", "Malayalam", "Hindi", "Tamil"];
+  static const options = [
+    "English (India)", "Malayalam", "Hindi", "Tamil", "Telugu", "Kannada",
+    "Bengali", "Marathi", "Gujarati", "Punjabi", "Urdu", "Arabic",
+    "French", "German", "Spanish", "Portuguese", "Chinese", "Japanese",
+    "Korean", "Russian",
+  ];
 
   @override
   void initState() {
@@ -44,7 +49,7 @@ class _LanguageScreenState extends State<LanguageScreen> {
       body: Container(
         margin: const EdgeInsets.all(16),
         decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(14), boxShadow: AppShadows.card),
-        child: Column(
+        child: ListView(
           children: options
               .map((lang) => RadioListTile<String>(
                     value: lang,

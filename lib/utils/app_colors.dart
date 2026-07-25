@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
 
 class AppColors {
-  static const Color primary = Color(0xFF2F6FED);
-  static const Color primaryDark = Color(0xFF1E4FD1);
-  static const Color background = Color(0xFFF3F6FC);
+  static const Color navy = Color(0xFF123A8F);
+  static const Color primary = Color(0xFF2563EB);
+  static const Color brightBlue = Color(0xFF3B82F6);
+  static const Color indigo = Color(0xFF5B5FEF);
+  static const Color violet = Color(0xFF7C3AED);
+  static const Color primaryDark = navy;
+  static const Color background = Color(0xFFF5F7FF);
   static const Color surface = Colors.white;
   static const Color textPrimary = Color(0xFF1B2430);
   static const Color textSecondary = Color(0xFF7C8698);
@@ -38,6 +42,12 @@ class AppGradients {
   static const LinearGradient punchCard = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [AppColors.primary, AppColors.primaryDark],
+    colors: [AppColors.primary, AppColors.indigo, AppColors.violet],
+  );
+
+  static const LinearGradient brand = LinearGradient(
+    begin: Alignment.centerLeft,
+    end: Alignment.centerRight,
+    colors: [AppColors.primary, AppColors.indigo, AppColors.violet],
   );
 }

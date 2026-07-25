@@ -7,9 +7,21 @@ import '../utils/app_colors.dart';
 import '../utils/attendance_calculator.dart';
 import '../utils/location_helper.dart';
 import '../utils/time_integrity_helper.dart';
+import '../utils/work_schedule.dart';
 import '../utils/notification_center.dart';
+import '../utils/progress_painters.dart';
 import 'leave_screen.dart';
 import 'notifications_screen.dart';
+import 'history_screen.dart';
+import 'personal_report_screen.dart';
+import 'announcement_detail_screen.dart';
+import 'payslip_request_screen.dart';
+import 'live_location_screen.dart';
+
+// Dark palette used only for this screen's hero header, to match the
+// reference design without changing the app's global light theme.
+const Color _kHeroDark1 = Color(0xFF0B0F1F);
+const Color _kHeroDark2 = Color(0xFF171B3D);
 
 class DashboardScreen extends StatefulWidget {
   final String employeeId;
@@ -40,6 +52,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
   DayType? dayType;
 
   String? wfhStatusToday;
+  String? lunchBreakStart;
+  String? lunchBreakEnd;
+  String? teaBreakStart;
+  String? teaBreakEnd;
   LocationStatus locationStatus = LocationStatus.loading;
   LocationResult? currentLocation;
 
@@ -67,11 +83,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _loadMonthlyAttendance();
   }
 
-  @override
-  void dispose() {
-    _clockTimer?.cancel();
-    super.dispose();
-  }
+ @override
+void dispose() {
+  _clockTimer?.cancel();
+  super.dispose();
+}
 
   Future<void> _loadEmployeeInfo() async {
     try {
@@ -113,6 +129,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
           punchInTime = data["punchIn"] ?? "--:--";
           punchOutTime = data["punchOut"] ?? "--:--";
           status = data["status"] ?? "Not Checked In";
+          lunchBreakStart = data["lunchBreakStart"]?.toString();
+          lunchBreakEnd = data["lunchBreakEnd"]?.toString();
+          teaBreakStart = data["teaBreakStart"]?.toString();
+          teaBreakEnd = data["teaBreakEnd"]?.toString();
           _updateClassification();
         });
       }
@@ -241,6 +261,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     await dbRef.child("WorkFromHomeRequests").child(widget.employeeId).child(date).set({
       "employeeId": widget.employeeId,
+      "employeeName": employeeName,
       "status": "pending",
       "requestedAt": DateTime.now().toIso8601String(),
       if (location != null) "latitude": location.latitude,
@@ -304,13 +325,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
       final result = await dayRef.runTransaction((Object? currentData) {
         final data = currentData == null ? <String, dynamic>{} : Map<String, dynamic>.from(currentData as Map);
         final currentStatus = data["status"] ?? "Not Checked In";
-        if (currentStatus == "Checked In" || currentStatus == "Checked Out") return Transaction.abort();
+        // Transactions can be retried by Firebase. Returning the already-written
+        // data makes a successful tap idempotent instead of cancelling it.
+        if (currentStatus == "Checked In" && data["punchIn"] != null) return Transaction.success(data);
+        if (currentStatus == "Checked Out") return Transaction.abort();
 
         data["employeeId"] = widget.employeeId;
         data["date"] = date;
         data["punchIn"] = time;
         data["status"] = "Checked In";
         data["workFromHome"] = bypassGeofence;
+        data["shiftType"] = WorkSchedule.shiftName;
 
         if (bypassGeofence) {
           data["punchInAddress"] = "Work From Home";
@@ -372,6 +397,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
       final result = await dayRef.runTransaction((Object? currentData) {
         if (currentData == null) return Transaction.abort();
         final data = Map<String, dynamic>.from(currentData as Map);
+        // Firebase may call this handler more than once. Do not abort a retry
+        // after a checkout has already been written.
+        if (data["status"] == "Checked Out" && data["punchOut"] != null) return Transaction.success(data);
         if (data["status"] != "Checked In") return Transaction.abort();
 
         data["punchOut"] = time;
@@ -411,63 +439,158 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  Future<void> _recordBreak({required bool isLunch, required bool start}) async {
+    if (status != "Checked In" || isSubmitting) return;
+    final allowed = isLunch ? (start ? WorkSchedule.canStartLunch : WorkSchedule.canEndLunch) : (start ? WorkSchedule.canStartTea : WorkSchedule.canEndTea);
+    if (!allowed) {
+      final name = isLunch ? "Lunch" : "Tea";
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("$name ${start ? 'break' : 'return'} is not available at this time.")));
+      return;
+    }
+    final field = isLunch ? (start ? "lunchBreakStart" : "lunchBreakEnd") : (start ? "teaBreakStart" : "teaBreakEnd");
+    final time = TimeOfDay.now().format(context);
+    setState(() => isSubmitting = true);
+    try {
+      await dbRef.child("Attendance").child(widget.employeeId).child(getDateKey()).update({field: time});
+      if (!mounted) return;
+      setState(() {
+        if (isLunch) {
+          if (start) lunchBreakStart = time; else lunchBreakEnd = time;
+        } else {
+          if (start) teaBreakStart = time; else teaBreakEnd = time;
+        }
+        isSubmitting = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => isSubmitting = false);
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Derived values for the redesigned hero card (shift progress, break time)
+  // ---------------------------------------------------------------------
+
+  int? _parseTimeToMinutes(String? t) {
+    if (t == null || t == "--:--") return null;
+    try {
+      final cleaned = t.trim().toUpperCase();
+      final isPM = cleaned.contains("PM");
+      final isAM = cleaned.contains("AM");
+      final numeric = cleaned.replaceAll(RegExp(r'[AP]M'), '').trim();
+      final parts = numeric.split(':');
+      int hour = int.parse(parts[0].trim());
+      final minute = int.parse(parts[1].trim());
+      if (isPM && hour != 12) hour += 12;
+      if (isAM && hour == 12) hour = 0;
+      return hour * 60 + minute;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  int _timeOfDayMinutes(TimeOfDay t) => t.hour * 60 + t.minute;
+
+  int get _shiftTotalMinutes => _timeOfDayMinutes(WorkSchedule.shiftEnd) - _timeOfDayMinutes(WorkSchedule.checkInStart);
+
+  int get _breakBudgetMinutes {
+    final lunch = _timeOfDayMinutes(WorkSchedule.lunchEnd) - _timeOfDayMinutes(WorkSchedule.lunchStart);
+    final tea = _timeOfDayMinutes(WorkSchedule.teaEnd) - _timeOfDayMinutes(WorkSchedule.teaStart);
+    return lunch + tea;
+  }
+
+  int get _breakMinutesTaken {
+    int total = 0;
+    final nowMinutes = _now.hour * 60 + _now.minute;
+
+    final ls = _parseTimeToMinutes(lunchBreakStart);
+    final le = _parseTimeToMinutes(lunchBreakEnd);
+    if (ls != null) {
+      if (le != null) {
+        total += (le - ls).clamp(0, 1000);
+      } else if (status == "Checked In") {
+        total += (nowMinutes - ls).clamp(0, 1000);
+      }
+    }
+
+    final ts = _parseTimeToMinutes(teaBreakStart);
+    final te = _parseTimeToMinutes(teaBreakEnd);
+    if (ts != null) {
+      if (te != null) {
+        total += (te - ts).clamp(0, 1000);
+      } else if (status == "Checked In") {
+        total += (nowMinutes - ts).clamp(0, 1000);
+      }
+    }
+
+    return total;
+  }
+
+  int get _workingMinutesLive {
+    if (status == "Checked Out") {
+      final pin = _parseTimeToMinutes(punchInTime);
+      final pout = _parseTimeToMinutes(punchOutTime);
+      if (pin == null || pout == null) return 0;
+      final gross = (pout - pin).clamp(0, 1000);
+      return (gross - _breakMinutesTaken).clamp(0, 1000);
+    }
+    if (status == "Checked In") {
+      final pin = _parseTimeToMinutes(punchInTime);
+      if (pin == null) return 0;
+      final nowMinutes = _now.hour * 60 + _now.minute;
+      // Cap at shift end (6:00 PM) so the ring/progress completes there
+      // instead of continuing to climb if the employee forgets to check out.
+      final shiftEndMinutes = _timeOfDayMinutes(WorkSchedule.shiftEnd);
+      final effectiveNowMinutes = nowMinutes > shiftEndMinutes ? shiftEndMinutes : nowMinutes;
+      final gross = (effectiveNowMinutes - pin).clamp(0, 1000);
+      return (gross - _breakMinutesTaken).clamp(0, 1000);
+    }
+    return 0;
+  }
+
+  double get _shiftProgress => _shiftTotalMinutes <= 0 ? 0 : (_workingMinutesLive / _shiftTotalMinutes).clamp(0.0, 1.0);
+  double get _breakProgress => _breakBudgetMinutes <= 0 ? 0 : (_breakMinutesTaken / _breakBudgetMinutes).clamp(0.0, 1.0);
+
+  String _formatMinutes(int minutes) {
+    final m = minutes < 0 ? 0 : minutes;
+    final h = m ~/ 60;
+    final mm = m % 60;
+    return "${h}h ${mm.toString().padLeft(2, '0')}m";
+  }
+
+  String get _greeting {
+    final h = _now.hour;
+    if (h < 12) return "Good Morning";
+    if (h < 17) return "Good Afternoon";
+    return "Good Evening";
+  }
+
+  // Uses the app's real logo asset (same one used on the native splash
+  // screen). Falls back to a placeholder icon if the asset isn't bundled
+  // yet, so the UI never breaks while the asset is being added.
+  Widget _logoMark({double size = 22}) {
+    return Image.asset(
+      'assets/images/workora_logo.png',
+      height: size,
+      width: size,
+      errorBuilder: (_, __, ___) => Icon(Icons.blur_circular_rounded, color: AppColors.brightBlue, size: size),
+    );
+  }
+
+  String get _initials {
+    final name = employeeName.isEmpty ? widget.employeeId : employeeName;
+    final parts = name.trim().split(RegExp(r'\s+')).where((p) => p.isNotEmpty).toList();
+    if (parts.isEmpty) return "?";
+    if (parts.length == 1) return parts[0].substring(0, 1).toUpperCase();
+    return (parts[0].substring(0, 1) + parts[1].substring(0, 1)).toUpperCase();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.primary,
+      backgroundColor: _kHeroDark1,
       body: Column(
         children: [
-          SafeArea(
-            bottom: false,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        DateFormat("EEE, dd MMMM yyyy").format(DateTime.now()),
-                        style: const TextStyle(color: Colors.white70, fontSize: 13),
-                      ),
-                      GestureDetector(
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(builder: (_) => NotificationsScreen(employeeId: widget.employeeId)),
-                          );
-                        },
-                        child: StreamBuilder<int>(
-                          stream: NotificationCenter.unreadCount(widget.employeeId),
-                          builder: (context, snapshot) {
-                            final count = snapshot.data ?? 0;
-                            return Container(
-                              padding: const EdgeInsets.all(10),
-                              decoration: BoxDecoration(color: Colors.white24, shape: BoxShape.circle),
-                              child: Badge(
-                                isLabelVisible: count > 0,
-                                label: Text("$count"),
-                                backgroundColor: AppColors.danger,
-                                child: const Icon(Icons.notifications_outlined, color: Colors.white, size: 20),
-                              ),
-                            );
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 18),
-                  Text(
-                    "Welcome, ${employeeName.isEmpty ? widget.employeeId : employeeName}",
-                    style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 4),
-                  Text("ID: ${widget.employeeId}", style: const TextStyle(color: Colors.white70, fontSize: 13)),
-                ],
-              ),
-            ),
-          ),
+          _buildHeader(),
           Expanded(
             child: Container(
               width: double.infinity,
@@ -484,37 +607,519 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         await _refreshLocation();
                       },
                       child: ListView(
-                        padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
+                        padding: const EdgeInsets.fromLTRB(20, 14, 20, 16),
                         children: [
                           _buildTabSwitcher(),
+                          const SizedBox(height: 14),
+                          _buildHeroCard(),
                           const SizedBox(height: 16),
-                          Center(
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                              decoration: BoxDecoration(color: AppColors.successLight, borderRadius: BorderRadius.circular(20)),
-                              child: const Text(
-                                "GENERAL SHIFT",
-                                style: TextStyle(color: AppColors.success, fontWeight: FontWeight.bold, fontSize: 11, letterSpacing: 0.5),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 20),
-                          Container(
-                            padding: const EdgeInsets.all(18),
-                            decoration: BoxDecoration(
-                              color: AppColors.surface,
-                              borderRadius: BorderRadius.circular(20),
-                              boxShadow: AppShadows.card,
-                            ),
-                            child: showHomeTab ? _buildHomeTabContent() : _buildOfficeTabContent(),
-                          ),
-                          const SizedBox(height: 28),
-                          _buildMonthSection(),
-                          const SizedBox(height: 20),
-                          _buildRequestLeaveButton(),
+                          _buildQuickActions(),
+                          const SizedBox(height: 16),
+                          _buildAnnouncementCarousel(),
                         ],
                       ),
                     ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHeader() {
+    return Container(
+      decoration: const BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [_kHeroDark1, _kHeroDark2])),
+      child: SafeArea(
+        bottom: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 22),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  _logoMark(),
+                  const SizedBox(width: 6),
+                  const Text("workora", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800, letterSpacing: -.6)),
+                ],
+              ),
+              const SizedBox(height: 18),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Stack(
+                    children: [
+                      Container(
+                        width: 52,
+                        height: 52,
+                        decoration: const BoxDecoration(shape: BoxShape.circle, gradient: AppGradients.punchCard),
+                        child: Center(child: Text(_initials, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 18))),
+                      ),
+                      Positioned(
+                        right: 1,
+                        bottom: 1,
+                        child: Container(
+                          width: 13,
+                          height: 13,
+                          decoration: BoxDecoration(color: AppColors.success, shape: BoxShape.circle, border: Border.all(color: _kHeroDark2, width: 2)),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text("$_greeting,", style: const TextStyle(color: Colors.white60, fontSize: 13)),
+                        const SizedBox(height: 2),
+                        Text(
+                          "${employeeName.isEmpty ? widget.employeeId : employeeName} \u{1F44B}",
+                          style: const TextStyle(color: Colors.white, fontSize: 19, fontWeight: FontWeight.w800),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 4),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(color: Colors.white.withOpacity(0.12), borderRadius: BorderRadius.circular(20)),
+                          child: Text("ID: ${widget.employeeId}", style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w600)),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  GestureDetector(
+                    onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => NotificationsScreen(employeeId: widget.employeeId))),
+                    child: StreamBuilder<int>(
+                      stream: NotificationCenter.unreadCount(widget.employeeId),
+                      builder: (context, snapshot) {
+                        final count = snapshot.data ?? 0;
+                        return Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(color: Colors.white.withOpacity(0.1), borderRadius: BorderRadius.circular(14)),
+                          child: Badge(
+                            isLabelVisible: count > 0,
+                            label: Text("$count"),
+                            backgroundColor: AppColors.danger,
+                            child: const Icon(Icons.notifications_outlined, color: Colors.white, size: 20),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHeroCard() {
+    final checkedIn = status == "Checked In";
+    final done = status == "Checked Out";
+    final isWfh = showHomeTab && wfhStatusToday == "approved";
+    final canAct = isWfh || (locationStatus == LocationStatus.granted && (currentLocation?.isWithinOfficeRange ?? false));
+    final statusLabel = done ? "YOU ARE\nCOMPLETED" : (checkedIn ? "YOU ARE\nCHECKED IN" : "READY TO\nCHECK IN");
+    final focalTime = checkedIn || done ? punchInTime : DateFormat("hh:mm a").format(_now);
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(gradient: AppGradients.punchCard, borderRadius: BorderRadius.circular(28), boxShadow: AppShadows.hero),
+      child: Column(
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text("CURRENT TIME", style: TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: .5)),
+                    const SizedBox(height: 6),
+                    Text(DateFormat("hh:mm a").format(_now), style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w800)),
+                    const SizedBox(height: 4),
+                    Text(DateFormat("EEE, dd MMM yyyy").format(_now), style: const TextStyle(color: Colors.white70, fontSize: 11)),
+                  ],
+                ),
+              ),
+              SizedBox(
+                width: 168,
+                height: 168,
+                child: CustomPaint(
+                  painter: ShiftRingPainter(progress: _shiftProgress),
+                  child: Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(statusLabel, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70, fontSize: 9, fontWeight: FontWeight.bold, letterSpacing: .5, height: 1.3)),
+                        const SizedBox(height: 6),
+                        Text(focalTime, style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w800)),
+                        const SizedBox(height: 10),
+                        _buildActionPill(checkedIn: checkedIn, done: done, canAct: canAct, isWfh: isWfh),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(children: [
+                      Container(padding: const EdgeInsets.all(6), decoration: BoxDecoration(color: Colors.white.withOpacity(0.15), borderRadius: BorderRadius.circular(8)), child: const Icon(Icons.work_outline_rounded, color: Colors.white, size: 14)),
+                      const SizedBox(width: 6),
+                      const Expanded(child: Text("Today's Work", style: TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.bold))),
+                    ]),
+                    const SizedBox(height: 6),
+                    Text(_formatMinutes(_workingMinutesLive), style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w800)),
+                    Text("of ${_formatMinutes(_shiftTotalMinutes)}", style: const TextStyle(color: Colors.white60, fontSize: 10)),
+                    const SizedBox(height: 6),
+                    ClipRRect(borderRadius: BorderRadius.circular(6), child: LinearProgressIndicator(value: _shiftProgress, minHeight: 5, backgroundColor: Colors.white24, valueColor: const AlwaysStoppedAnimation(Colors.white))),
+                    const SizedBox(height: 16),
+                    Row(children: [
+                      Container(padding: const EdgeInsets.all(6), decoration: BoxDecoration(color: Colors.white.withOpacity(0.15), borderRadius: BorderRadius.circular(8)), child: const Icon(Icons.local_cafe_outlined, color: Colors.white, size: 14)),
+                      const SizedBox(width: 6),
+                      const Expanded(child: Text("Break Time", style: TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.bold))),
+                    ]),
+                    const SizedBox(height: 6),
+                    Text(_formatMinutes(_breakMinutesTaken), style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w800)),
+                    Text("of ${_formatMinutes(_breakBudgetMinutes)}", style: const TextStyle(color: Colors.white60, fontSize: 10)),
+                    const SizedBox(height: 6),
+                    ClipRRect(borderRadius: BorderRadius.circular(6), child: LinearProgressIndicator(value: _breakProgress, minHeight: 5, backgroundColor: Colors.white24, valueColor: const AlwaysStoppedAnimation(Colors.white))),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
+          Row(children: [
+            const Icon(Icons.location_on_outlined, color: Colors.white, size: 16),
+            const SizedBox(width: 6),
+            Expanded(child: Text(isWfh ? "Work From Home" : (currentLocation?.address ?? "Checking your location..."), maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontSize: 12))),
+            if (!isWfh) ...[const Icon(Icons.verified_rounded, color: Color(0xFFA7F3D0), size: 16), const SizedBox(width: 4), const Text("GPS Verified", style: TextStyle(color: Color(0xFFA7F3D0), fontSize: 11, fontWeight: FontWeight.w700))],
+          ]),
+          if (checkedIn && !done && (WorkSchedule.isLunchBreak || WorkSchedule.isTeaBreak)) ...[
+            const SizedBox(height: 14),
+            _buildBreakStatus(),
+          ],
+          if (showHomeTab && wfhStatusToday != "approved" && !done) ...[
+            const SizedBox(height: 12),
+            TextButton.icon(onPressed: wfhStatusToday == null ? _requestWfh : null, icon: const Icon(Icons.home_work_outlined, color: Colors.white, size: 17), label: Text(wfhStatusToday == "pending" ? "WFH approval pending" : "Request Work From Home", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold))),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildActionPill({required bool checkedIn, required bool done, required bool canAct, required bool isWfh}) {
+    if (done) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(20)),
+        child: const Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.check_circle_outline, color: Colors.white, size: 14), SizedBox(width: 6), Text("Completed", style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 12))]),
+      );
+    }
+
+    final isCheckOut = checkedIn;
+    final enabled = !isSubmitting && canAct;
+
+    return SizedBox(
+      height: 34,
+      child: ElevatedButton(
+        onPressed: !enabled
+            ? null
+            : () => isCheckOut ? _punchOut(bypassGeofence: isWfh) : _punchIn(bypassGeofence: isWfh),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: Colors.white,
+          foregroundColor: AppColors.primary,
+          padding: const EdgeInsets.symmetric(horizontal: 18),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        ),
+        child: isSubmitting
+            ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+            : Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(isCheckOut ? "CHECK OUT" : "CHECK IN", style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12)),
+                  const SizedBox(width: 4),
+                  const Icon(Icons.arrow_forward_rounded, size: 14),
+                ],
+              ),
+      ),
+    );
+  }
+
+  Widget _buildBreakStatus() {
+    final isLunch = WorkSchedule.isLunchBreak;
+    return Container(padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12), decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(12)), child: Row(children: [Icon(isLunch ? Icons.restaurant_outlined : Icons.coffee_outlined, color: Colors.white, size: 18), const SizedBox(width: 8), Text(isLunch ? 'Lunch break \u00b7 1:00 PM \u2013 2:00 PM' : 'Tea break \u00b7 4:30 PM \u2013 5:00 PM', style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700))]));
+  }
+
+  Widget _buildStatsRow() {
+    final total = fullDayCount + halfDayCount + absentCount;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            const Text("Attendance for this month", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+            OutlinedButton.icon(
+              onPressed: _pickMonth,
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppColors.primary,
+                side: const BorderSide(color: AppColors.primary),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              ),
+              icon: const Icon(Icons.calendar_today, size: 14),
+              label: Text(DateFormat("MMM").format(selectedMonth).toUpperCase()),
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        Row(
+          children: [
+            Expanded(child: _buildStatCard(Icons.event_available_outlined, "Full Day", fullDayCount, total, AppColors.success, AppColors.successLight)),
+            const SizedBox(width: 10),
+            Expanded(child: _buildStatCard(Icons.event_note_outlined, "Half Day", halfDayCount, total, AppColors.warning, AppColors.warningLight)),
+            const SizedBox(width: 10),
+            Expanded(child: _buildStatCard(Icons.event_busy_outlined, "Absent", absentCount, total, AppColors.danger, AppColors.dangerLight)),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildStatCard(IconData icon, String label, int value, int total, Color color, Color bg) {
+    final percent = total == 0 ? 0.0 : value / total;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), boxShadow: AppShadows.card),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Container(padding: const EdgeInsets.all(7), decoration: BoxDecoration(color: bg, shape: BoxShape.circle), child: Icon(icon, color: color, size: 15)),
+              SizedBox(
+                width: 30,
+                height: 30,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    CustomPaint(size: const Size(30, 30), painter: PercentRingPainter(percent: percent, color: color)),
+                    Text("${(percent * 100).round()}%", style: TextStyle(fontSize: 8, fontWeight: FontWeight.w800, color: color)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(label, style: const TextStyle(fontSize: 11, color: AppColors.textSecondary, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 2),
+          Text("$value", style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
+          const Text("Days", style: TextStyle(fontSize: 10, color: AppColors.textSecondary)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildQuickActions() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text("Quick Actions", style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
+        const SizedBox(height: 12),
+        IntrinsicHeight(
+          child: Row(children: [
+            Expanded(child: _quickAction("assets/icons/leave.png", "Request\nLeave", AppColors.violet, () => Navigator.push(context, MaterialPageRoute(builder: (_) => LeaveScreen(employeeId: widget.employeeId, employeeName: employeeName.isEmpty ? widget.employeeId : employeeName))))),
+            const SizedBox(width: 10),
+            Expanded(child: _quickAction("assets/icons/payslip.png", "Payslip\nLocation", AppColors.indigo, () => Navigator.push(context, MaterialPageRoute(builder: (_) => PayslipRequestScreen(employeeId: widget.employeeId, employeeName: employeeName.isEmpty ? widget.employeeId : employeeName))))),
+            const SizedBox(width: 10),
+            Expanded(child: _quickAction("assets/icons/live_location.png", "Live\nLocation", AppColors.success, () => Navigator.push(context, MaterialPageRoute(builder: (_) => const LiveLocationScreen())))),
+            const SizedBox(width: 10),
+            Expanded(child: _quickAction("assets/icons/attendance_history.png", "Attendance\nHistory", AppColors.warning, () => Navigator.push(context, MaterialPageRoute(builder: (_) => HistoryScreen(employeeId: widget.employeeId, employeeName: employeeName.isEmpty ? widget.employeeId : employeeName))))),
+          ]),
+        ),
+      ],
+    );
+  }
+
+  Widget _quickAction(String iconAsset, String label, Color color, VoidCallback onTap) => InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), boxShadow: AppShadows.card),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(9),
+                decoration: BoxDecoration(color: color.withOpacity(.12), borderRadius: BorderRadius.circular(14)),
+                child: Image.asset(
+                  iconAsset,
+                  width: 32,
+                  height: 32,
+                  errorBuilder: (_, __, ___) => Icon(Icons.image_not_supported_outlined, color: color, size: 26),
+                ),
+              ),
+              const SizedBox(height: 14),
+              Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, height: 1.2, color: AppColors.textPrimary)),
+              const SizedBox(height: 8),
+              Align(alignment: Alignment.centerRight, child: Container(padding: const EdgeInsets.all(4), decoration: BoxDecoration(color: color.withOpacity(.12), shape: BoxShape.circle), child: Icon(Icons.arrow_forward_rounded, size: 12, color: color))),
+            ],
+          ),
+        ),
+      );
+
+  List<_ActivityItem> _buildActivityItems() {
+    final items = <_ActivityItem>[];
+    final isWfh = showHomeTab && wfhStatusToday == "approved";
+
+    if (punchInTime != "--:--") {
+      items.add(_ActivityItem(time: punchInTime, label: "Checked In", status: isWfh ? "Work From Home" : "Office", icon: Icons.login_rounded, color: AppColors.success, bg: AppColors.successLight));
+    }
+    if (lunchBreakStart != null) {
+      items.add(_ActivityItem(time: lunchBreakStart!, label: "Lunch Break", status: lunchBreakEnd != null ? "Completed" : "In Progress", icon: Icons.restaurant_outlined, color: AppColors.warning, bg: AppColors.warningLight));
+    }
+    if (teaBreakStart != null) {
+      items.add(_ActivityItem(time: teaBreakStart!, label: "Tea Break", status: teaBreakEnd != null ? "Completed" : "In Progress", icon: Icons.coffee_outlined, color: AppColors.warning, bg: AppColors.warningLight));
+    }
+    if (punchOutTime != "--:--") {
+      items.add(_ActivityItem(time: punchOutTime, label: "Checked Out", status: "Completed", icon: Icons.logout_rounded, color: AppColors.violet, bg: AppColors.background));
+    } else if (status == "Checked In") {
+      items.add(_ActivityItem(time: "--:--", label: "Check Out", status: "Pending", icon: Icons.logout_rounded, color: AppColors.textSecondary, bg: AppColors.background));
+    }
+    return items;
+  }
+
+  Widget _buildTodayActivity() {
+    final items = _buildActivityItems();
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(18), boxShadow: AppShadows.card),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text("Today's activity", style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+              GestureDetector(
+                onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => HistoryScreen(employeeId: widget.employeeId, employeeName: employeeName.isEmpty ? widget.employeeId : employeeName))),
+                child: const Row(mainAxisSize: MainAxisSize.min, children: [Text("View Timeline", style: TextStyle(color: AppColors.primary, fontSize: 12, fontWeight: FontWeight.w700)), Icon(Icons.chevron_right, color: AppColors.primary, size: 16)]),
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
+          if (items.isEmpty)
+            const Text("Your check-in and check-out activity will appear here.", style: TextStyle(color: AppColors.textSecondary, fontSize: 12))
+          else
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: List.generate(items.length, (i) => _timelineItem(items[i], isFirst: i == 0, isLast: i == items.length - 1)),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _timelineItem(_ActivityItem item, {required bool isFirst, required bool isLast}) {
+    return Expanded(
+      child: Column(
+        children: [
+          SizedBox(
+            height: 32,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                if (!isFirst) Positioned(left: 0, right: 16, child: Container(height: 2, color: AppColors.divider)),
+                if (!isLast) Positioned(left: 16, right: 0, child: Container(height: 2, color: AppColors.divider)),
+                Container(width: 30, height: 30, decoration: BoxDecoration(color: item.bg, shape: BoxShape.circle), child: Icon(item.icon, size: 14, color: item.color)),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(item.time, textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 11)),
+          const SizedBox(height: 2),
+          Text(item.label, textAlign: TextAlign.center, style: const TextStyle(fontSize: 9, color: AppColors.textSecondary)),
+          const SizedBox(height: 4),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(color: item.color.withOpacity(0.12), borderRadius: BorderRadius.circular(8)),
+            child: Text(item.status, style: TextStyle(fontSize: 8, fontWeight: FontWeight.w700, color: item.color)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAnnouncementCarousel() {
+    return StreamBuilder<DatabaseEvent>(
+      stream: dbRef.child('Announcements').limitToLast(1).onValue,
+      builder: (context, snapshot) {
+        Map<String, dynamic>? latest;
+        if (snapshot.hasData && snapshot.data!.snapshot.value != null) {
+          final value = snapshot.data!.snapshot.value;
+          if (value is Map) {
+            final raw = Map<dynamic, dynamic>.from(value);
+            if (raw.isNotEmpty) {
+              final item = Map<dynamic, dynamic>.from(raw.entries.first.value as Map);
+              latest = {
+                "title": item["title"]?.toString() ?? "Announcement",
+                "message": item["message"]?.toString() ?? "",
+                "createdAt": item["createdAt"]?.toString(),
+              };
+            }
+          }
+        }
+
+        return _announcementCard(latest);
+      },
+    );
+  }
+
+  Widget _announcementCard(Map<String, dynamic>? data) {
+    final hasAnnouncement = data != null;
+    final title = data?["title"]?.toString() ?? "";
+    final message = data?["message"]?.toString() ?? "";
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(22),
+      decoration: BoxDecoration(gradient: AppGradients.brand, borderRadius: BorderRadius.circular(22), boxShadow: AppShadows.hero),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.campaign_rounded, color: Colors.white, size: 34),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Company announcement', style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w700)),
+                const SizedBox(height: 6),
+                if (hasAnnouncement) ...[
+                  Text(title, style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800), maxLines: 1, overflow: TextOverflow.ellipsis),
+                  const SizedBox(height: 5),
+                  Text(message, style: const TextStyle(color: Colors.white70, fontSize: 13), maxLines: 2, overflow: TextOverflow.ellipsis),
+                  const SizedBox(height: 14),
+                  SizedBox(
+                    height: 34,
+                    child: ElevatedButton(
+                      onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AnnouncementDetailScreen())),
+                      style: ElevatedButton.styleFrom(backgroundColor: Colors.white, foregroundColor: AppColors.primary, padding: const EdgeInsets.symmetric(horizontal: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18))),
+                      child: const Row(mainAxisSize: MainAxisSize.min, children: [Text("View Details", style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800)), SizedBox(width: 3), Icon(Icons.chevron_right, size: 15)]),
+                    ),
+                  ),
+                ] else
+                  const Text("No announcements yet!", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700)),
+              ],
             ),
           ),
         ],
@@ -552,283 +1157,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ),
     );
   }
+}
 
-  Widget _liveClockRow({required bool bypassGeofence}) {
-    final checkedIn = status == "Checked In";
-    final done = status == "Checked Out";
-    final canAct = bypassGeofence || (locationStatus == LocationStatus.granted && (currentLocation?.isWithinOfficeRange ?? false));
+class _ActivityItem {
+  final String time;
+  final String label;
+  final String status;
+  final IconData icon;
+  final Color color;
+  final Color bg;
 
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Text(DateFormat("hh:mm:ss a").format(_now), style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
-        SizedBox(
-          height: 44,
-          child: ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: done ? AppColors.textSecondary.withOpacity(0.3) : AppColors.primary,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-              padding: const EdgeInsets.symmetric(horizontal: 24),
-            ),
-            onPressed: (isSubmitting || done || !canAct)
-                ? null
-                : () => checkedIn ? _punchOut(bypassGeofence: bypassGeofence) : _punchIn(bypassGeofence: bypassGeofence),
-            child: isSubmitting
-                ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                : Text(
-                    done ? "Done" : (checkedIn ? "Check Out" : "Check In"),
-                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                  ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _locationLine() {
-    if (locationStatus == LocationStatus.mockDetected) {
-      return Container(
-        margin: const EdgeInsets.only(top: 12),
-        padding: const EdgeInsets.all(10),
-        decoration: BoxDecoration(color: AppColors.dangerLight, borderRadius: BorderRadius.circular(10)),
-        child: const Row(
-          children: [
-            Icon(Icons.gpp_bad, color: AppColors.danger, size: 16),
-            SizedBox(width: 6),
-            Expanded(child: Text("Mock location detected", style: TextStyle(color: AppColors.danger, fontSize: 12, fontWeight: FontWeight.bold))),
-          ],
-        ),
-      );
-    }
-
-    final inRange = currentLocation?.isWithinOfficeRange ?? false;
-    return Padding(
-      padding: const EdgeInsets.only(top: 12),
-      child: Row(
-        children: [
-          Icon(Icons.location_on, size: 14, color: inRange ? AppColors.success : AppColors.warning),
-          const SizedBox(width: 4),
-          Expanded(
-            child: Text(
-              currentLocation?.address ?? "Locating...",
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(color: inRange ? AppColors.success : AppColors.warning, fontSize: 12, fontWeight: FontWeight.bold),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildOfficeTabContent() {
-    final wfhApproved = wfhStatusToday == "approved";
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        if (wfhApproved)
-          Container(
-            margin: const EdgeInsets.only(bottom: 12),
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(color: AppColors.warningLight, borderRadius: BorderRadius.circular(12)),
-            child: const Text(
-              "You're approved for Work From Home today \u2014 switch to the Home tab to check in.",
-              style: TextStyle(color: AppColors.warning, fontSize: 12, fontWeight: FontWeight.bold),
-            ),
-          ),
-        _liveClockRow(bypassGeofence: false),
-        _locationLine(),
-        const SizedBox(height: 16),
-        Row(
-          children: [
-            Expanded(child: _statColumn(Icons.login, punchInTime, "Check In")),
-            Expanded(child: _statColumn(Icons.logout, punchOutTime, "Check Out")),
-            Expanded(child: _statColumn(Icons.access_time, workingHours, "Working Hrs")),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Widget _buildHomeTabContent() {
-    if (wfhStatusToday == "approved") {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Container(
-            margin: const EdgeInsets.only(bottom: 12),
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(color: AppColors.successLight, borderRadius: BorderRadius.circular(12)),
-            child: const Text("Work From Home approved for today", style: TextStyle(color: AppColors.success, fontWeight: FontWeight.bold, fontSize: 12)),
-          ),
-          _liveClockRow(bypassGeofence: true),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(child: _statColumn(Icons.login, punchInTime, "Check In")),
-              Expanded(child: _statColumn(Icons.logout, punchOutTime, "Check Out")),
-              Expanded(child: _statColumn(Icons.access_time, workingHours, "Working Hrs")),
-            ],
-          ),
-        ],
-      );
-    }
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        if (wfhStatusToday == "pending")
-          Container(
-            margin: const EdgeInsets.only(bottom: 14),
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(color: AppColors.warningLight, borderRadius: BorderRadius.circular(12)),
-            child: const Text("WFH request pending admin approval", style: TextStyle(color: AppColors.warning, fontWeight: FontWeight.bold, fontSize: 12)),
-          )
-        else if (wfhStatusToday == "rejected")
-          Container(
-            margin: const EdgeInsets.only(bottom: 14),
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(color: AppColors.dangerLight, borderRadius: BorderRadius.circular(12)),
-            child: const Text("WFH request rejected \u2014 please check in from the office", style: TextStyle(color: AppColors.danger, fontWeight: FontWeight.bold, fontSize: 12)),
-          )
-        else
-          SizedBox(
-            height: 50,
-            child: OutlinedButton.icon(
-              onPressed: _requestWfh,
-              style: OutlinedButton.styleFrom(
-                foregroundColor: AppColors.primary,
-                side: const BorderSide(color: AppColors.primary),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(26)),
-              ),
-              icon: const Icon(Icons.home_outlined),
-              label: const Text("Request Work From Home", style: TextStyle(fontWeight: FontWeight.bold)),
-            ),
-          ),
-        const SizedBox(height: 20),
-        const Divider(),
-        const SizedBox(height: 10),
-        const Text("Share Your Location", style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
-        const SizedBox(height: 10),
-        Row(
-          children: [
-            const Icon(Icons.location_on, color: AppColors.primary),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                currentLocation?.address ?? "Fetching location...",
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            TextButton(onPressed: _refreshLocation, child: const Text("Update Location")),
-          ],
-        ),
-        const SizedBox(height: 14),
-        Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(color: AppColors.background, borderRadius: BorderRadius.circular(12)),
-          child: const Row(
-            children: [
-              Icon(Icons.info_outline, color: AppColors.primary, size: 18),
-              SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  "Your location is shared with the request. If the admin approves it, you can check in.",
-                  style: TextStyle(color: AppColors.primary, fontSize: 12),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _statColumn(IconData icon, String value, String label) {
-    return Column(
-      children: [
-        Icon(icon, color: AppColors.primary, size: 22),
-        const SizedBox(height: 6),
-        Text(value, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-        Text(label, style: const TextStyle(color: AppColors.textSecondary, fontSize: 11)),
-      ],
-    );
-  }
-
-  Widget _buildMonthSection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            const Text("Attendance for this month", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
-            OutlinedButton.icon(
-              onPressed: _pickMonth,
-              style: OutlinedButton.styleFrom(
-                foregroundColor: AppColors.primary,
-                side: const BorderSide(color: AppColors.primary),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-              ),
-              icon: const Icon(Icons.calendar_today, size: 14),
-              label: Text(DateFormat("MMM").format(selectedMonth).toUpperCase()),
-            ),
-          ],
-        ),
-        const SizedBox(height: 14),
-        Row(
-          children: [
-            Expanded(child: _monthStatCard("Full Day", fullDayCount, AppColors.success, AppColors.successLight)),
-            const SizedBox(width: 10),
-            Expanded(child: _monthStatCard("Half Day", halfDayCount, AppColors.warning, AppColors.warningLight)),
-            const SizedBox(width: 10),
-            Expanded(child: _monthStatCard("Absent", absentCount, AppColors.danger, AppColors.dangerLight)),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Widget _monthStatCard(String label, int value, Color color, Color bg) {
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 14),
-      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(12), border: Border(top: BorderSide(color: color, width: 3))),
-      child: Column(
-        children: [
-          Text(label, style: const TextStyle(fontSize: 12, color: AppColors.textPrimary)),
-          const SizedBox(height: 6),
-          Text("$value", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: color)),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildRequestLeaveButton() {
-    return SizedBox(
-      height: 52,
-      child: OutlinedButton.icon(
-        onPressed: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => LeaveScreen(
-                employeeId: widget.employeeId,
-                employeeName: employeeName.isEmpty ? widget.employeeId : employeeName,
-              ),
-            ),
-          );
-        },
-        style: OutlinedButton.styleFrom(
-          foregroundColor: AppColors.primary,
-          side: const BorderSide(color: AppColors.primary),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(26)),
-        ),
-        icon: const Icon(Icons.add),
-        label: const Text("Request Leave", style: TextStyle(fontWeight: FontWeight.bold)),
-      ),
-    );
-  }
+  _ActivityItem({required this.time, required this.label, required this.status, required this.icon, required this.color, required this.bg});
 }

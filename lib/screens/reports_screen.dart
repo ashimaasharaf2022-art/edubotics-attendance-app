@@ -58,6 +58,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
         final usersMap = Map<dynamic, dynamic>.from(usersSnap.value as Map);
         usersMap.forEach((id, data) {
           final userData = Map<dynamic, dynamic>.from(data as Map);
+          // Super Admin is not an employee — exclude from reports.
+          if (userData["role"]?.toString().toLowerCase() == "superadmin") return;
           loadedEmployees[id.toString()] =
               (userData["name"] ?? id).toString();
         });
@@ -482,7 +484,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
         setState(() => period = selection.first);
       },
       style: SegmentedButton.styleFrom(
-        selectedBackgroundColor: const Color(0xFFF26C23),
+        selectedBackgroundColor: AppColors.primary,
         selectedForegroundColor: Colors.white,
       ),
     );
@@ -592,7 +594,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                   const Text("Per Employee", style: TextStyle(fontSize: 12)),
                   Switch(
                     value: showPerEmployeeChart,
-                    activeColor: const Color(0xFFF26C23),
+                    activeColor: AppColors.primary,
                     onChanged: (value) {
                       setState(() {
                         showPerEmployeeChart = value;
@@ -673,12 +675,12 @@ class _ReportsScreenState extends State<ReportsScreen> {
                         LineChartBarData(
                           spots: spots,
                           isCurved: true,
-                          color: const Color(0xFFF26C23),
+                          color: AppColors.primary,
                           barWidth: 3,
                           dotData: FlDotData(show: spots.length <= 31),
                           belowBarData: BarAreaData(
                             show: true,
-                            color: const Color(0xFFF26C23).withOpacity(0.12),
+                            color: AppColors.primary.withOpacity(0.12),
                           ),
                         ),
                       ],

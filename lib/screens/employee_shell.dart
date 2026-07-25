@@ -6,6 +6,7 @@ import 'dashboard_screen.dart';
 import 'history_screen.dart';
 import 'personal_report_screen.dart';
 import 'profile_screen.dart';
+import 'admin_message_screen.dart';
 
 class EmployeeShell extends StatefulWidget {
   final String employeeId;
@@ -54,6 +55,13 @@ class _EmployeeShellState extends State<EmployeeShell> {
 
     return Scaffold(
       body: IndexedStack(index: currentIndex, children: tabs),
+      floatingActionButton: FloatingActionButton(
+        backgroundColor: AppColors.indigo,
+        foregroundColor: Colors.white,
+        onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => SupportRequestScreen(employeeId: widget.employeeId, employeeName: employeeName.isEmpty ? widget.employeeId : employeeName))),
+        child: const Icon(Icons.add),
+      ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
       bottomNavigationBar: NavigationBar(
         selectedIndex: currentIndex,
         onDestinationSelected: (i) => setState(() => currentIndex = i),

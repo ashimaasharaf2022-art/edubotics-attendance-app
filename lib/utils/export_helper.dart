@@ -102,7 +102,7 @@ class ExportHelper {
                 color: PdfColors.white,
               ),
               headerDecoration: const pw.BoxDecoration(
-                color: PdfColor.fromInt(0xFFF26C23),
+                color: PdfColor.fromInt(0xFF2563EB),
               ),
               cellAlignment: pw.Alignment.centerLeft,
               cellPadding: const pw.EdgeInsets.symmetric(horizontal: 6, vertical: 6),

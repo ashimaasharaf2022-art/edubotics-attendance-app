@@ -7,6 +7,7 @@ import 'screens/employee_shell.dart';
 import 'screens/admin_shell.dart';
 import 'utils/session_manager.dart';
 import 'utils/notification_helper.dart';
+import 'utils/app_colors.dart';
 
 
 Future<void> main() async {
@@ -19,7 +20,7 @@ Future<void> main() async {
   }
 
   await NotificationHelper.init();
-  await NotificationHelper.scheduleDailyPunchReminder();
+  await NotificationHelper.scheduleWorkdayReminders();
 
   runApp(const AttendanceApp());
 }
@@ -31,8 +32,30 @@ class AttendanceApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: "Edubotics Global",
-      theme: ThemeData(primarySwatch: Colors.orange),
+      title: "Workora",
+      theme: ThemeData(
+        useMaterial3: true,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: AppColors.primary,
+          primary: AppColors.primary,
+          secondary: AppColors.indigo,
+          surface: AppColors.surface,
+        ),
+        scaffoldBackgroundColor: AppColors.background,
+        appBarTheme: const AppBarTheme(
+          backgroundColor: AppColors.primary,
+          foregroundColor: Colors.white,
+          elevation: 0,
+        ),
+        inputDecorationTheme: InputDecorationTheme(
+          filled: true,
+          fillColor: Colors.white,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 17),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: AppColors.divider)),
+          enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: AppColors.divider)),
+          focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: AppColors.primary, width: 1.5)),
+        ),
+      ),
       home: const SessionGate(),
     );
   }

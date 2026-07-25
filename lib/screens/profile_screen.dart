@@ -261,7 +261,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               width: double.infinity,
               padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
               decoration: const BoxDecoration(
-                color: AppColors.primary,
+                gradient: AppGradients.brand,
                 borderRadius: BorderRadius.vertical(bottom: Radius.circular(24)),
               ),
               child: Column(
@@ -369,6 +369,24 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 ),
               ),
             ),
+            if (widget.viewOnly)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+                child: Container(
+                  decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(18), boxShadow: AppShadows.card),
+                  child: Column(
+                    children: [
+                      _profileDetail(Icons.person_outline, "Full name", profile["name"]?.toString() ?? widget.employeeId),
+                      _profileDetail(Icons.email_outlined, "Email", profile["email"]?.toString() ?? "Not provided"),
+                      _profileDetail(Icons.phone_outlined, "Phone", profile["phone"]?.toString() ?? "Not provided"),
+                      _profileDetail(Icons.badge_outlined, "Employee ID", widget.employeeId),
+                      _profileDetail(Icons.work_outline, "Role", (profile["role"]?.toString() ?? "employee").toUpperCase()),
+                      _profileDetail(Icons.business_outlined, "Department", profile["department"]?.toString() ?? "Not provided"),
+                      _profileDetail(Icons.workspace_premium_outlined, "Designation", profile["designation"]?.toString() ?? "Not provided"),
+                    ],
+                  ),
+                ),
+              ),
             if (canEdit && editing)
               Padding(
                 padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
@@ -473,6 +491,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
       ],
     );
   }
+
+  Widget _profileDetail(IconData icon, String label, String value) => ListTile(
+        leading: Icon(icon, color: AppColors.primary),
+        title: Text(label, style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+        subtitle: Text(value, style: const TextStyle(color: AppColors.textPrimary, fontSize: 15, fontWeight: FontWeight.w700)),
+      );
 
   Widget _section(String title, List<Widget> tiles) {
     return Padding(
