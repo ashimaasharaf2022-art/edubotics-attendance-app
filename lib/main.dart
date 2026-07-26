@@ -61,6 +61,20 @@ class AttendanceApp extends StatelessWidget {
         ),
       ),
       home: const SessionGate(),
+      builder: (context, child) {
+        // Some phones ship with a much larger system "Font size" setting
+        // than others. Left unclamped, that scaling makes short fixed-width
+        // labels (like "Today's Work" or "Attendance History") wrap letter
+        // by letter instead of word by word. Clamping keeps every phone
+        // showing a consistent, readable layout while still respecting a
+        // little of the user's own accessibility preference.
+        final mediaQuery = MediaQuery.of(context);
+        final clampedScaler = mediaQuery.textScaler.clamp(minScaleFactor: 0.9, maxScaleFactor: 1.15);
+        return MediaQuery(
+          data: mediaQuery.copyWith(textScaler: clampedScaler),
+          child: child!,
+        );
+      },
     );
   }
 }
