@@ -34,7 +34,7 @@ class _AdminApprovalsScreenState extends State<AdminApprovalsScreen> with Single
       databaseURL:
           "https://edubotics-attendance-default-rtdb.asia-southeast1.firebasedatabase.app",
     ).ref();
-    _tabController = TabController(length: 4, vsync: this, initialIndex: widget.initialTabIndex.clamp(0, 3));
+    _tabController = TabController(length: 3, vsync: this, initialIndex: widget.initialTabIndex.clamp(0, 2));
   }
 
   @override
@@ -45,20 +45,6 @@ class _AdminApprovalsScreenState extends State<AdminApprovalsScreen> with Single
 
   Future<void> _resolveMessage(String key) async {
     await dbRef.child('AdminMessages').child(key).update({'status': 'resolved'});
-  }
-
-  Future<void> _updatePayslipStatus(String employeeId, String key, String status) async {
-    await dbRef.child('PayslipRequests').child(employeeId).child(key).update({'status': status});
-    final snap = await dbRef.child('PayslipRequests').child(employeeId).child(key).get();
-    if (!snap.exists) return;
-    final data = Map<dynamic, dynamic>.from(snap.value as Map);
-    await NotificationCenter.send(
-      employeeId: employeeId,
-      title: status == 'ready' ? 'Payslip Ready' : 'Payslip Request Update',
-      message: status == 'ready'
-          ? 'Your payslip for ${data['monthLabel'] ?? data['month']} is ready. Please check with HR.'
-          : 'Your payslip request for ${data['monthLabel'] ?? data['month']} was $status.',
-    );
   }
 
   String _generateOtp() {
@@ -148,7 +134,6 @@ class _AdminApprovalsScreenState extends State<AdminApprovalsScreen> with Single
           unselectedLabelColor: Colors.white70,
           tabs: const [
             Tab(text: "Messages"),
-            Tab(text: "Payslips"),
             Tab(text: "Device Logins"),
             Tab(text: "Work From Home"),
           ],
@@ -158,7 +143,6 @@ class _AdminApprovalsScreenState extends State<AdminApprovalsScreen> with Single
         controller: _tabController,
         children: [
           _buildMessagesList(),
-          _buildPayslipList(),
           _buildDeviceList(),
           _buildWfhList(),
         ],
@@ -198,88 +182,6 @@ class _AdminApprovalsScreenState extends State<AdminApprovalsScreen> with Single
                 trailing: resolved
                     ? const Text("Resolved", style: TextStyle(color: AppColors.success, fontWeight: FontWeight.bold, fontSize: 11))
                     : TextButton(onPressed: () => _resolveMessage(entry.key.toString()), child: const Text('Resolve')),
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
-
-  Widget _buildPayslipList() {
-    return StreamBuilder<DatabaseEvent>(
-      stream: dbRef.child('PayslipRequests').onValue,
-      builder: (context, snapshot) {
-        if (!snapshot.hasData || snapshot.data!.snapshot.value == null) {
-          return const Center(child: Text("No payslip requests yet."));
-        }
-        final empMap = Map<dynamic, dynamic>.from(snapshot.data!.snapshot.value as Map);
-        final items = <Map<String, dynamic>>[];
-        empMap.forEach((empId, requestsMap) {
-          final requests = Map<dynamic, dynamic>.from(requestsMap as Map);
-          requests.forEach((key, value) {
-            final req = Map<dynamic, dynamic>.from(value as Map);
-            items.add({...req, "employeeId": empId.toString(), "key": key.toString()});
-          });
-        });
-        items.sort((a, b) => (b["requestedAt"] ?? "").toString().compareTo((a["requestedAt"] ?? "").toString()));
-
-        if (items.isEmpty) return const Center(child: Text("No payslip requests yet."));
-
-        return ListView.builder(
-          padding: const EdgeInsets.all(16),
-          itemCount: items.length,
-          itemBuilder: (_, index) {
-            final item = items[index];
-            final status = item["status"]?.toString() ?? "pending";
-            return Container(
-              margin: const EdgeInsets.only(bottom: 10),
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(14), boxShadow: AppShadows.card),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text("${item["employeeName"] ?? item["employeeId"]}", style: const TextStyle(fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 4),
-                  Text("Month: ${item["monthLabel"] ?? item["month"]}", style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
-                  if ((item["note"]?.toString() ?? "").isNotEmpty) ...[
-                    const SizedBox(height: 4),
-                    Text(item["note"].toString(), style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
-                  ],
-                  const SizedBox(height: 10),
-                  if (status == "pending")
-                    Row(
-                      children: [
-                        Expanded(
-                          child: OutlinedButton(
-                            style: OutlinedButton.styleFrom(foregroundColor: AppColors.danger),
-                            onPressed: () => _updatePayslipStatus(item["employeeId"], item["key"], "rejected"),
-                            child: const Text("Reject"),
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: ElevatedButton(
-                            style: ElevatedButton.styleFrom(backgroundColor: AppColors.success),
-                            onPressed: () => _updatePayslipStatus(item["employeeId"], item["key"], "ready"),
-                            child: const Text("Mark Ready", style: TextStyle(color: Colors.white)),
-                          ),
-                        ),
-                      ],
-                    )
-                  else
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: (status == "ready" ? AppColors.success : AppColors.danger).withOpacity(0.12),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Text(
-                        status == "ready" ? "Ready" : "Rejected",
-                        style: TextStyle(color: status == "ready" ? AppColors.success : AppColors.danger, fontWeight: FontWeight.bold, fontSize: 11),
-                      ),
-                    ),
-                ],
               ),
             );
           },

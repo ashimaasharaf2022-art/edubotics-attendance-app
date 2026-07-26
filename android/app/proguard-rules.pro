@@ -1,0 +1,4 @@
+-keep class com.dexterous.** { *; }
+-keep class com.google.gson.** { *; }
+-keep,allowobfuscation,allowshrinking class com.google.gson.reflect.TypeToken
+-keep,allowobfuscation,allowshrinking class * extends com.google.gson.reflect.TypeToken

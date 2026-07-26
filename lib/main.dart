@@ -19,8 +19,12 @@ Future<void> main() async {
     debugPrint("INIT ERROR: $e");
   }
 
-  await NotificationHelper.init();
-  await NotificationHelper.scheduleWorkdayReminders();
+  try {
+    await NotificationHelper.init();
+    await NotificationHelper.scheduleWorkdayReminders();
+  } catch (e) {
+    debugPrint("NOTIFICATION INIT ERROR: $e");
+  }
 
   runApp(const AttendanceApp());
 }

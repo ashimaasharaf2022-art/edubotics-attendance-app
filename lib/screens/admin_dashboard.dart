@@ -3,6 +3,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_database/firebase_database.dart';
 import '../utils/app_colors.dart';
 import 'admin_approvals_screen.dart';
+import 'admin_payslip_requests_screen.dart';
 import 'admin_leave_screen.dart';
 import 'announcement_detail_screen.dart';
 
@@ -29,6 +30,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
   int totalEmployees = 0;
   int checkedInToday = 0;
   int pendingApprovals = 0;
+  int pendingPayslips = 0;
 
   @override
   void initState() {
@@ -64,7 +66,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
   }
 
   Future<void> _loadPendingApprovals() async {
-    int count = 0;
+    int otherCount = 0;
     final deviceSnap = await dbRef.child("DeviceApprovalRequests").get();
     if (deviceSnap.exists) {
       final empMap = Map<dynamic, dynamic>.from(deviceSnap.value as Map);
@@ -72,7 +74,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
         final requests = Map<dynamic, dynamic>.from(requestsMap as Map);
         requests.forEach((_, v) {
           final req = Map<dynamic, dynamic>.from(v as Map);
-          if (req["status"] == "pending" || req["status"] == "otp_ready") count++;
+          if (req["status"] == "pending" || req["status"] == "otp_ready") otherCount++;
         });
       });
     }
@@ -83,7 +85,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
         final dates = Map<dynamic, dynamic>.from(datesMap as Map);
         dates.forEach((_, v) {
           final req = Map<dynamic, dynamic>.from(v as Map);
-          if (req["status"] == "pending") count++;
+          if (req["status"] == "pending") otherCount++;
         });
       });
     }
@@ -92,9 +94,11 @@ class _AdminDashboardState extends State<AdminDashboard> {
       final msgs = Map<dynamic, dynamic>.from(msgSnap.value as Map);
       msgs.forEach((_, v) {
         final req = Map<dynamic, dynamic>.from(v as Map);
-        if (req["status"] != "resolved") count++;
+        if (req["status"] != "resolved") otherCount++;
       });
     }
+
+    int payslipCount = 0;
     final paySnap = await dbRef.child("PayslipRequests").get();
     if (paySnap.exists) {
       final empMap = Map<dynamic, dynamic>.from(paySnap.value as Map);
@@ -102,12 +106,15 @@ class _AdminDashboardState extends State<AdminDashboard> {
         final requests = Map<dynamic, dynamic>.from(requestsMap as Map);
         requests.forEach((_, v) {
           final req = Map<dynamic, dynamic>.from(v as Map);
-          if (req["status"] == "pending") count++;
+          if (req["status"] == "pending") payslipCount++;
         });
       });
     }
     if (!mounted) return;
-    setState(() => pendingApprovals = count);
+    setState(() {
+      pendingApprovals = otherCount;
+      pendingPayslips = payslipCount;
+    });
   }
 
   Future<void> _loadQuickStats() async {
@@ -334,9 +341,10 @@ class _AdminDashboardState extends State<AdminDashboard> {
                   "Review and issue payslips",
                   AppColors.indigo,
                   () async {
-                    await Navigator.push(context, MaterialPageRoute(builder: (_) => AdminApprovalsScreen(adminId: widget.employeeId, adminName: widget.employeeName ?? widget.employeeId, initialTabIndex: 1)));
+                    await Navigator.push(context, MaterialPageRoute(builder: (_) => AdminPayslipRequestsScreen(adminId: widget.employeeId, adminName: widget.employeeName ?? widget.employeeId)));
                     _loadPendingApprovals();
                   },
+                  badge: pendingPayslips > 0 ? "$pendingPayslips" : null,
                 ),
               ),
             ],
@@ -353,11 +361,11 @@ class _AdminDashboardState extends State<AdminDashboard> {
                   "Other Messages",
                   "Employee messages & requests",
                   AppColors.success,
-                  badge: pendingApprovals > 0 ? "$pendingApprovals" : null,
                   () async {
                     await Navigator.push(context, MaterialPageRoute(builder: (_) => AdminApprovalsScreen(adminId: widget.employeeId, adminName: widget.employeeName ?? widget.employeeId, initialTabIndex: 0)));
                     _loadPendingApprovals();
                   },
+                  badge: pendingApprovals > 0 ? "$pendingApprovals" : null,
                 ),
               ),
               const SizedBox(width: 12),

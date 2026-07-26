@@ -39,6 +39,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
   String employeeName = "";
 
   bool showHomeTab = false;
+  // Which mode today's check-in actually used — null until checked in.
+  // Once set, the other tab is locked until check-out so a punch can't
+  // straddle both Office and Work From Home in the same day.
+  bool? checkedInAsWfh;
   bool isLoading = true;
   bool isSubmitting = false;
 
@@ -123,6 +127,10 @@ void dispose() {
       final snapshot = await dbRef.child("Attendance").child(widget.employeeId).child(getDateKey()).get();
       if (!mounted) return;
 
+      if (!snapshot.exists) {
+        setState(() => checkedInAsWfh = null);
+      }
+
       if (snapshot.exists) {
         final data = Map<dynamic, dynamic>.from(snapshot.value as Map);
         setState(() {
@@ -133,6 +141,10 @@ void dispose() {
           lunchBreakEnd = data["lunchBreakEnd"]?.toString();
           teaBreakStart = data["teaBreakStart"]?.toString();
           teaBreakEnd = data["teaBreakEnd"]?.toString();
+          if (data.containsKey("workFromHome") && status != "Not Checked In") {
+            checkedInAsWfh = data["workFromHome"] == true;
+            showHomeTab = checkedInAsWfh!;
+          }
           _updateClassification();
         });
       }
@@ -143,7 +155,9 @@ void dispose() {
         if (!mounted) return;
         setState(() {
           wfhStatusToday = wfhData["status"]?.toString();
-          if (wfhStatusToday == "approved" || wfhStatusToday == "pending") showHomeTab = true;
+          if (checkedInAsWfh == null && (wfhStatusToday == "approved" || wfhStatusToday == "pending")) {
+            showHomeTab = true;
+          }
         });
       }
 
@@ -357,6 +371,7 @@ void dispose() {
       setState(() {
         punchInTime = time;
         status = "Checked In";
+        checkedInAsWfh = bypassGeofence;
         isSubmitting = false;
       });
 
@@ -937,7 +952,7 @@ void dispose() {
           child: Row(children: [
             Expanded(child: _quickAction("assets/icons/leave.png", "Request\nLeave", AppColors.violet, () => Navigator.push(context, MaterialPageRoute(builder: (_) => LeaveScreen(employeeId: widget.employeeId, employeeName: employeeName.isEmpty ? widget.employeeId : employeeName))))),
             const SizedBox(width: 10),
-            Expanded(child: _quickAction("assets/icons/payslip.png", "Payslip\nLocation", AppColors.indigo, () => Navigator.push(context, MaterialPageRoute(builder: (_) => PayslipRequestScreen(employeeId: widget.employeeId, employeeName: employeeName.isEmpty ? widget.employeeId : employeeName))))),
+            Expanded(child: _quickAction("assets/icons/payslip.png", "Payslip\n", AppColors.indigo, () => Navigator.push(context, MaterialPageRoute(builder: (_) => PayslipRequestScreen(employeeId: widget.employeeId, employeeName: employeeName.isEmpty ? widget.employeeId : employeeName))))),
             const SizedBox(width: 10),
             Expanded(child: _quickAction("assets/icons/live_location.png", "Live\nLocation", AppColors.success, () => Navigator.push(context, MaterialPageRoute(builder: (_) => const LiveLocationScreen())))),
             const SizedBox(width: 10),
@@ -1128,19 +1143,47 @@ void dispose() {
   }
 
   Widget _buildTabSwitcher() {
+    final locked = checkedInAsWfh != null;
+    final homeLocked = locked && checkedInAsWfh == false; // checked in via Office
+    final officeLocked = locked && checkedInAsWfh == true; // checked in via WFH
+
+    void lockedTap() {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("You checked in via ${checkedInAsWfh! ? 'Work From Home' : 'Office'} today. Check out first to switch.")),
+      );
+    }
+
     return Container(
       padding: const EdgeInsets.all(4),
       decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(30), boxShadow: AppShadows.card),
       child: Row(
         children: [
-          Expanded(child: _tabButton("Home", Icons.home_outlined, showHomeTab, () => setState(() => showHomeTab = true))),
-          Expanded(child: _tabButton("Office", Icons.apartment_outlined, !showHomeTab, () => setState(() => showHomeTab = false))),
+          Expanded(
+            child: _tabButton(
+              "Home",
+              Icons.home_outlined,
+              showHomeTab,
+              homeLocked ? lockedTap : () => setState(() => showHomeTab = true),
+              disabled: homeLocked,
+            ),
+          ),
+          Expanded(
+            child: _tabButton(
+              "Office",
+              Icons.apartment_outlined,
+              !showHomeTab,
+              officeLocked ? lockedTap : () => setState(() => showHomeTab = false),
+              disabled: officeLocked,
+            ),
+          ),
         ],
       ),
     );
   }
 
-  Widget _tabButton(String label, IconData icon, bool selected, VoidCallback onTap) {
+  Widget _tabButton(String label, IconData icon, bool selected, VoidCallback onTap, {bool disabled = false}) {
+    final iconColor = selected ? Colors.white : (disabled ? AppColors.divider : AppColors.textSecondary);
+    final textColor = selected ? Colors.white : (disabled ? AppColors.divider : AppColors.textSecondary);
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -1149,9 +1192,13 @@ void dispose() {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, size: 16, color: selected ? Colors.white : AppColors.textSecondary),
+            Icon(icon, size: 16, color: iconColor),
             const SizedBox(width: 6),
-            Text(label, style: TextStyle(color: selected ? Colors.white : AppColors.textSecondary, fontWeight: FontWeight.bold, fontSize: 13)),
+            Text(label, style: TextStyle(color: textColor, fontWeight: FontWeight.bold, fontSize: 13)),
+            if (disabled) ...[
+              const SizedBox(width: 4),
+              Icon(Icons.lock_outline, size: 12, color: iconColor),
+            ],
           ],
         ),
       ),
