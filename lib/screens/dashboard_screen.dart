@@ -952,7 +952,7 @@ void dispose() {
           child: Row(children: [
             Expanded(child: _quickAction("assets/icons/leave.png", "Request\nLeave", AppColors.violet, () => Navigator.push(context, MaterialPageRoute(builder: (_) => LeaveScreen(employeeId: widget.employeeId, employeeName: employeeName.isEmpty ? widget.employeeId : employeeName))))),
             const SizedBox(width: 10),
-            Expanded(child: _quickAction("assets/icons/payslip.png", "Payslip", AppColors.indigo, () => Navigator.push(context, MaterialPageRoute(builder: (_) => PayslipRequestScreen(employeeId: widget.employeeId, employeeName: employeeName.isEmpty ? widget.employeeId : employeeName))))),
+            Expanded(child: _quickAction("assets/icons/payslip.png", "Payslip\n", AppColors.indigo, () => Navigator.push(context, MaterialPageRoute(builder: (_) => PayslipRequestScreen(employeeId: widget.employeeId, employeeName: employeeName.isEmpty ? widget.employeeId : employeeName))))),
             const SizedBox(width: 10),
             Expanded(child: _quickAction("assets/icons/live_location.png", "Live\nLocation", AppColors.success, () => Navigator.push(context, MaterialPageRoute(builder: (_) => const LiveLocationScreen())))),
             const SizedBox(width: 10),
