@@ -5,6 +5,7 @@ import 'dart:math';
 import '../utils/app_colors.dart';
 import '../utils/activity_logger.dart';
 import '../utils/notification_center.dart';
+import '../utils/attendance_calculator.dart';
 
 class AdminApprovalsScreen extends StatefulWidget {
   final String adminId;
@@ -34,7 +35,7 @@ class _AdminApprovalsScreenState extends State<AdminApprovalsScreen> with Single
       databaseURL:
           "https://edubotics-attendance-default-rtdb.asia-southeast1.firebasedatabase.app",
     ).ref();
-    _tabController = TabController(length: 3, vsync: this, initialIndex: widget.initialTabIndex.clamp(0, 2));
+    _tabController = TabController(length: 4, vsync: this, initialIndex: widget.initialTabIndex.clamp(0, 3));
   }
 
   @override
@@ -119,6 +120,73 @@ class _AdminApprovalsScreenState extends State<AdminApprovalsScreen> with Single
     );
   }
 
+  /// Verifying an auto punch-out is NOT a shortcut to a free full day. The
+  /// admin only supplies the real checkout time; the day is then run through
+  /// the exact same 9-hour (gross, break included) rule as any normal punch.
+  /// So a verified 9:00 AM \u2192 6:00 PM day is a full day, but a verified
+  /// 9:00 AM \u2192 4:00 PM day is a mis-punch and owes the shortfall, same as
+  /// if the employee had punched out themselves at 4:00 PM.
+  Future<void> _reviewPunchRequest(Map<String, dynamic> request, String decision) async {
+    final employeeId = request['employeeId'].toString();
+    final date = request['date'].toString();
+    TimeOfDay? selectedTime;
+    if (decision == 'approved') {
+      final suggested = AttendanceCalculator.toMinutes(request['suggestedPunchOut']?.toString()) ??
+          AttendanceCalculator.checkOutEndMinutes;
+      selectedTime = await showTimePicker(
+        context: context,
+        initialTime: TimeOfDay(hour: suggested ~/ 60, minute: suggested % 60),
+        helpText: 'Select verified checkout time',
+      );
+      if (selectedTime == null) return;
+    }
+    final selectedText = selectedTime?.format(context);
+    await dbRef.child('PunchRequests').child(employeeId).child(date).update({
+      'status': decision,
+      'reviewedBy': widget.adminId,
+      'reviewedAt': DateTime.now().toIso8601String(),
+      if (selectedText != null) 'selectedPunchOut': selectedText,
+    });
+
+    if (decision == 'approved') {
+      final punchIn = request['punchIn']?.toString();
+      final result = AttendanceCalculator.calculate(punchIn: punchIn, punchOut: selectedText);
+      final isFullDay = result.dayType == DayType.fullDay;
+
+      await dbRef.child('Attendance').child(employeeId).child(date).update({
+        'punchOut': selectedText,
+        'status': 'Checked Out',
+        'attendanceStatus': isFullDay
+            ? 'Full Day (auto punch-out verified)'
+            : 'Mis-punch (auto punch-out verified)',
+        'approvedAutoCheckout': true,
+        // The record is no longer an unresolved auto punch-out \u2014 it's a
+        // normal, classified attendance record now.
+        'autoPunchOut': null,
+        'autoCheckedOutAt': null,
+        'punchoutRequestStatus': null,
+      });
+
+      await NotificationCenter.send(
+        employeeId: employeeId,
+        title: 'Auto checkout approved',
+        message: isFullDay
+            ? 'Your checkout for $date was verified as $selectedText and the day was marked Full Day.'
+            : 'Your checkout for $date was verified as $selectedText. That\'s short of 9 hours, so ${AttendanceCalculator.formatHours(result.shortfallHours)} was added to your outstanding compensation.',
+      );
+    } else {
+      await dbRef.child('Attendance').child(employeeId).child(date).update({
+        'status': 'Auto Checkout Rejected',
+        'attendanceStatus': 'Auto punch-out rejected by admin',
+      });
+      await NotificationCenter.send(
+        employeeId: employeeId,
+        title: 'Auto checkout rejected',
+        message: 'Your auto checkout request for $date was rejected.',
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -136,6 +204,7 @@ class _AdminApprovalsScreenState extends State<AdminApprovalsScreen> with Single
             Tab(text: "Messages"),
             Tab(text: "Device Logins"),
             Tab(text: "Work From Home"),
+            Tab(text: "Punchout Requests"),
           ],
         ),
       ),
@@ -145,6 +214,7 @@ class _AdminApprovalsScreenState extends State<AdminApprovalsScreen> with Single
           _buildMessagesList(),
           _buildDeviceList(),
           _buildWfhList(),
+          _buildPunchRequests(),
         ],
       ),
     );
@@ -341,6 +411,38 @@ class _AdminApprovalsScreenState extends State<AdminApprovalsScreen> with Single
             );
           },
         );
+      },
+    );
+  }
+
+  Widget _buildPunchRequests() {
+    return StreamBuilder<DatabaseEvent>(
+      stream: dbRef.child('PunchRequests').onValue,
+      builder: (context, snapshot) {
+        if (!snapshot.hasData || snapshot.data!.snapshot.value == null) return const Center(child: Text('No punch requests'));
+        final employees = Map<dynamic, dynamic>.from(snapshot.data!.snapshot.value as Map);
+        final requests = <Map<String, dynamic>>[];
+        employees.forEach((employeeId, values) {
+          final dates = Map<dynamic, dynamic>.from(values as Map);
+          dates.forEach((date, value) {
+            final request = Map<dynamic, dynamic>.from(value as Map);
+            // This queue is reserved for an employee who forgot to check out.
+            // Short-day / compensation records have their own Attendance tab.
+            if (request['status'] == 'pending' && request['type'] == 'auto_checkout') {
+              requests.add({...request, 'employeeId': employeeId.toString(), 'date': date.toString()});
+            }
+          });
+        });
+        if (requests.isEmpty) return const Center(child: Text('No pending punch requests'));
+        return ListView.builder(padding: const EdgeInsets.all(16), itemCount: requests.length, itemBuilder: (_, i) {
+          final item = requests[i];
+          return Container(margin: const EdgeInsets.only(bottom: 10), padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(14), boxShadow: AppShadows.card), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('${item['employeeId']} • ${item['date']}', style: const TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 4), Text('Check-in: ${item['punchIn'] ?? '--'} • No checkout recorded', style: const TextStyle(color: AppColors.textSecondary)),
+            const SizedBox(height: 4), Text('Suggested boundary: ${item['suggestedPunchOut'] ?? '11:59 PM'}', style: const TextStyle(color: AppColors.textSecondary)),
+            const SizedBox(height: 10), Row(children: [Expanded(child: OutlinedButton(onPressed: () => _reviewPunchRequest(item, 'rejected'), child: const Text('Reject'))), const SizedBox(width: 10), Expanded(child: ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppColors.success), onPressed: () => _reviewPunchRequest(item, 'approved'), child: const Text('Verify & choose time', style: TextStyle(color: Colors.white))))])
+          ]));
+        });
       },
     );
   }

@@ -8,6 +8,7 @@ import '../utils/location_helper.dart';
 import '../utils/app_colors.dart';
 import '../utils/app_constants.dart';
 import '../utils/email_alert_helper.dart';
+import '../utils/work_schedule.dart';
 
 class PunchCard extends StatefulWidget {
   final String employeeId;
@@ -37,6 +38,7 @@ class _PunchCardState extends State<PunchCard> {
   double? lastLng;
   bool isWorkFromHome = false;
   String? wfhStatusToday;
+  int outstandingMinutes = 0;
 
   DayType? dayType;
   String? dayTypeLabel;
@@ -86,7 +88,7 @@ class _PunchCardState extends State<PunchCard> {
       workingHours = "0 hr 0 min";
       return;
     }
-    final result = AttendanceCalculator.calculate(punchIn: punchInTime, punchOut: punchOutTime);
+    final result = AttendanceCalculator.calculate(punchIn: punchInTime, punchOut: punchOutTime, workFromHome: isWorkFromHome);
     dayType = result.dayType;
     dayTypeLabel = result.label;
     workingHours = AttendanceCalculator.formatHours(result.netHours);
@@ -117,6 +119,10 @@ class _PunchCardState extends State<PunchCard> {
         if (!mounted) return;
         setState(() => wfhStatusToday = wfhData["status"]?.toString());
       }
+      final balanceSnap = await attendanceRef.child('AttendanceSummary').child(widget.employeeId).child('outstandingMinutes').get();
+      if (balanceSnap.exists && mounted) {
+        setState(() => outstandingMinutes = int.tryParse(balanceSnap.value.toString()) ?? 0);
+      }
     } catch (e) {
       debugPrint(e.toString());
     }
@@ -141,6 +147,7 @@ class _PunchCardState extends State<PunchCard> {
     await EmailAlertHelper.sendAlert(
       subject: "Work From Home Request",
       message: "${widget.employeeId} has requested to work from home today ($date).",
+      templateId: EmailAlertHelper.templateLeaveRequest,
     );
 
     if (!mounted) return;
@@ -155,6 +162,11 @@ class _PunchCardState extends State<PunchCard> {
     }
 
     final wfhApproved = wfhStatusToday == "approved";
+
+    if (!wfhApproved && !WorkSchedule.canCheckIn) {
+      _showMessage('Office check-in is available only from 8:00 AM to 12:00 AM.');
+      return;
+    }
 
     if (!wfhApproved && (currentLocation == null || !currentLocation!.isWithinOfficeRange)) {
       final distance = currentLocation?.distanceFromOffice.round() ?? 0;
@@ -233,6 +245,11 @@ class _PunchCardState extends State<PunchCard> {
       return;
     }
 
+    if (!isWorkFromHome && !WorkSchedule.canCheckOut) {
+      _showMessage('Office check-out is available only until 12:00 AM.');
+      return;
+    }
+
     if (!isWorkFromHome && (currentLocation == null || !currentLocation!.isWithinOfficeRange)) {
       final distance = currentLocation?.distanceFromOffice.round() ?? 0;
       _showMessage(
@@ -259,6 +276,15 @@ class _PunchCardState extends State<PunchCard> {
 
         data["punchOut"] = time;
         data["status"] = "Checked Out";
+        final attendance = AttendanceCalculator.calculate(
+          punchIn: data['punchIn']?.toString(),
+          punchOut: time,
+          workFromHome: data['workFromHome'] == true,
+        );
+        data['attendanceStatus'] = attendance.label;
+        data['netWorkMinutes'] = (attendance.netHours * 60).round();
+        data['shortfallMinutes'] = (attendance.shortfallHours * 60).round();
+        data['extraWorkMinutes'] = (attendance.extraHours * 60).round();
 
         if (isWorkFromHome) {
           data["punchOutAddress"] = "Work From Home";
@@ -289,13 +315,56 @@ class _PunchCardState extends State<PunchCard> {
         _updateClassification();
         isSubmitting = false;
       });
-
-      _showMessage("Punch Out Saved");
+      final attendance = AttendanceCalculator.calculate(
+        punchIn: punchInTime,
+        punchOut: time,
+        workFromHome: isWorkFromHome,
+      );
+      await _updateCompensationBalance(date);
+      if (attendance.dayType == DayType.misPunch) {
+        await attendanceRef.child('PunchRequests').child(widget.employeeId).child(date).set({
+          'employeeId': widget.employeeId,
+          'date': date,
+          'type': 'mis_punch',
+          'status': 'pending',
+          'shortfallMinutes': (attendance.shortfallHours * 60).round(),
+          'message': 'Worked ${AttendanceCalculator.formatHours(attendance.netHours)}; 9 hours are required.',
+          'createdAt': DateTime.now().toIso8601String(),
+        });
+        _showMessage('Mis-punch recorded. ${AttendanceCalculator.formatHours(attendance.shortfallHours)} must be compensated on another day.');
+      } else {
+        _showMessage("Punch Out Saved");
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() => isSubmitting = false);
       _showMessage("Error : $e");
     }
+  }
+
+  /// Rebuild the employee's outstanding time balance from attendance records.
+  /// A short day adds debt; any time above nine hours on a later office day
+  /// reduces it. Keeping the balance in the database makes it available to
+  /// both employee and administrator dashboards.
+  Future<void> _updateCompensationBalance(String currentDate) async {
+    final snapshot = await attendanceRef.child('Attendance').child(widget.employeeId).get();
+    if (!snapshot.exists) return;
+    final records = Map<dynamic, dynamic>.from(snapshot.value as Map);
+    final dates = records.keys.map((e) => e.toString()).toList()..sort();
+    var balance = 0;
+    for (final key in dates) {
+      final record = Map<dynamic, dynamic>.from(records[key] as Map);
+      if (record['punchIn'] == null || record['punchOut'] == null || record['workFromHome'] == true || record['attendanceOverride'] == 'Full Day Approved') continue;
+      final result = AttendanceCalculator.calculate(punchIn: record['punchIn'].toString(), punchOut: record['punchOut'].toString());
+      balance += (result.shortfallHours * 60).round();
+      balance -= (result.extraHours * 60).round();
+      if (balance < 0) balance = 0;
+    }
+    await attendanceRef.child('AttendanceSummary').child(widget.employeeId).update({
+      'outstandingMinutes': balance,
+      'updatedAt': DateTime.now().toIso8601String(),
+    });
+    await attendanceRef.child('Attendance').child(widget.employeeId).child(currentDate).update({'outstandingBalanceMinutes': balance});
   }
 
   void _showMessage(String message) {
@@ -316,15 +385,15 @@ class _PunchCardState extends State<PunchCard> {
   }
 
   Widget _wfhSection() {
-  if (!widget.showWfhButton) {
-    return const SizedBox.shrink();
-  }
+    if (!widget.showWfhButton) {
+      return const SizedBox.shrink();
+    }
 
-  if (status != "Not Checked In") {
-    return const SizedBox.shrink();
-  }
+    if (status != "Not Checked In") {
+      return const SizedBox.shrink();
+    }
 
-  if (wfhStatusToday == "approved") {
+    if (wfhStatusToday == "approved") {
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         margin: const EdgeInsets.only(bottom: 10),
@@ -392,13 +461,15 @@ class _PunchCardState extends State<PunchCard> {
         return _banner(icon: Icons.location_off, color: AppColors.danger, text: "Location permission denied. Enable it in app settings.", showRetry: true);
       case LocationStatus.error:
         return _banner(icon: Icons.error_outline, color: AppColors.danger, text: "Couldn't get your location. Try again.", showRetry: true);
+      case LocationStatus.mockDetected:
+        return _banner(icon: Icons.security, color: AppColors.danger, text: "Mock location detected. Disable mock location apps to punch.", showRetry: true);
       case LocationStatus.granted:
         final inRange = currentLocation?.isWithinOfficeRange ?? false;
         final distance = currentLocation?.distanceFromOffice.round() ?? 0;
         return _banner(
           icon: inRange ? Icons.check_circle : Icons.location_on,
           color: inRange ? AppColors.success : AppColors.warning,
-          text: inRange ? "You're at the office" : "${distance}m from office \u2014 move closer",
+          text: inRange ? "You're at the office" : "${distance}m from office — move closer",
           showRetry: !inRange,
         );
     }
@@ -427,7 +498,9 @@ class _PunchCardState extends State<PunchCard> {
     final checkedIn = status == "Checked In";
     final done = status == "Checked Out";
     final wfhApproved = wfhStatusToday == "approved";
-    final canAct = wfhApproved || (locationStatus == LocationStatus.granted && (currentLocation?.isWithinOfficeRange ?? false));
+    final insideOffice = locationStatus == LocationStatus.granted && (currentLocation?.isWithinOfficeRange ?? false);
+    final withinTime = checkedIn ? WorkSchedule.canCheckOut : WorkSchedule.canCheckIn;
+    final canAct = wfhApproved || (insideOffice && withinTime);
 
     return SizedBox(
       width: double.infinity,
@@ -582,6 +655,10 @@ class _PunchCardState extends State<PunchCard> {
                 ],
               ),
             ),
+            if (outstandingMinutes > 0) ...[
+              const SizedBox(height: 8),
+              Text('Time to compensate: ${AttendanceCalculator.formatHours(outstandingMinutes / 60)}', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+            ],
           ],
         ],
       ),

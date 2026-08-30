@@ -178,40 +178,85 @@ class _ReportsScreenState extends State<ReportsScreen> {
   /// Classifies a single day's record using AttendanceCalculator.
   /// Returns null if the day is still in progress (punched in today,
   /// not yet punched out) rather than a final classification.
+  List<AttendanceSession> _sessionsFromRecord(Map<String, dynamic>? record) {
+    if (record == null) return <AttendanceSession>[];
+
+    final sessions = <AttendanceSession>[];
+    final raw = record["sessions"];
+
+    if (raw is List) {
+      for (final item in raw) {
+        if (item is Map && item["punchIn"] != null) {
+          sessions.add(AttendanceSession(
+            punchIn: item["punchIn"].toString(),
+            punchOut: item["punchOut"]?.toString(),
+          ));
+        }
+      }
+    } else if (raw is Map) {
+      final entries = raw.entries.toList()
+        ..sort((a, b) => a.key.toString().compareTo(b.key.toString()));
+      for (final entry in entries) {
+        final item = entry.value;
+        if (item is Map && item["punchIn"] != null) {
+          sessions.add(AttendanceSession(
+            punchIn: item["punchIn"].toString(),
+            punchOut: item["punchOut"]?.toString(),
+          ));
+        }
+      }
+    }
+
+    if (sessions.isEmpty && record["punchIn"] != null) {
+      sessions.add(AttendanceSession(
+        punchIn: record["punchIn"].toString(),
+        punchOut: record["punchOut"]?.toString(),
+      ));
+    }
+
+    return sessions;
+  }
+
+  AttendanceResult? _calculateSessions(Map<String, dynamic>? record) {
+    final sessions = _sessionsFromRecord(record);
+    if (sessions.isEmpty) return null;
+    return AttendanceCalculator.calculateFromSessions(
+      sessions,
+      workFromHome: record?['workFromHome'] == true,
+    );
+  }
+
   DayType? _classifyDay(Map<String, dynamic>? record, DateTime date) {
     final isToday = _isSameDay(date, DateTime.now());
+    final sessions = _sessionsFromRecord(record);
 
-    if (record == null || record["punchIn"] == null) {
-      return DayType.absent;
+    if (sessions.isEmpty) return DayType.absent;
+
+    final last = sessions.last;
+    if (last.punchOut == null) {
+      return isToday ? null : DayType.absent;
     }
 
-    final punchIn = record["punchIn"]?.toString();
-    final punchOut = record["punchOut"]?.toString();
-
-    if (punchOut == null) {
-      if (isToday) {
-        return null;
-      }
-      return DayType.absent;
-    }
-
-    final result = AttendanceCalculator.calculate(
-      punchIn: punchIn,
-      punchOut: punchOut,
-    );
-    return result.dayType;
+    return AttendanceCalculator.calculateFromSessions(
+      sessions,
+      workFromHome: record?['workFromHome'] == true,
+    ).dayType;
   }
 
   double _netHoursFor(Map<String, dynamic>? record) {
-    if (record == null) return 0;
-    final punchIn = record["punchIn"]?.toString();
-    final punchOut = record["punchOut"]?.toString();
-    if (punchIn == null || punchOut == null) return 0;
-    return AttendanceCalculator.calculate(
-      punchIn: punchIn,
-      punchOut: punchOut,
-    ).netHours;
+    return _calculateSessions(record)?.netHours ?? 0;
   }
+
+  String _sessionSummary(Map<String, dynamic>? record) {
+    final sessions = _sessionsFromRecord(record);
+    if (sessions.isEmpty) return '--';
+    return sessions.asMap().entries.map((entry) {
+      final i = entry.key + 1;
+      final s = entry.value;
+      return 'S$i: ${s.punchIn} → ${s.punchOut ?? '--'}';
+    }).join('\n');
+  }
+
 
   /// Builds a day-by-day attendance % series for the month containing
   /// [referenceDate]. If [employeeId] is null, averages across all
@@ -236,7 +281,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
         final dayType = _classifyDay(record, d);
         dayValue = switch (dayType) {
           DayType.fullDay => 100,
-          DayType.halfDay => 50,
+          DayType.misPunch => 50,
+          DayType.halfDay => 50, // legacy value, never actually returned
           _ => 0,
         };
       } else {
@@ -249,7 +295,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
             final dayType = _classifyDay(record, d);
             total += switch (dayType) {
               DayType.fullDay => 100,
-              DayType.halfDay => 50,
+              DayType.misPunch => 50,
+              DayType.halfDay => 50, // legacy value, never actually returned
               _ => 0,
             };
           });
@@ -271,7 +318,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
     employees.forEach((empId, name) {
       int fullDays = 0;
-      int halfDays = 0;
+      int misDays = 0;
       int absentDays = 0;
       int inProgressDays = 0;
       double totalHours = 0;
@@ -296,8 +343,14 @@ class _ReportsScreenState extends State<ReportsScreen> {
               fullDays++;
               totalHours += _netHoursFor(record);
               break;
+            case DayType.misPunch:
+              misDays++;
+              totalHours += _netHoursFor(record);
+              break;
             case DayType.halfDay:
-              halfDays++;
+              // Legacy value, never actually returned by the calculator,
+              // but treated the same as a mis-punch if it ever appears.
+              misDays++;
               totalHours += _netHoursFor(record);
               break;
             case DayType.absent:
@@ -319,7 +372,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
         employeeId: empId,
         name: name,
         fullDays: fullDays,
-        halfDays: halfDays,
+        misDays: misDays,
         absentDays: absentDays,
         inProgressDays: inProgressDays,
         totalHours: totalHours,
@@ -340,7 +393,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
               employeeId: r.employeeId,
               name: r.name,
               fullDays: r.fullDays,
-              halfDays: r.halfDays,
+              halfDays: r.misDays,
               absentDays: r.absentDays,
               totalHours: r.totalHours,
               lastStatus: r.lastStatus,
@@ -415,7 +468,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
     final reports = loading ? <_EmployeeReport>[] : _buildReports();
 
     final totalFull = reports.fold<int>(0, (sum, r) => sum + r.fullDays);
-    final totalHalf = reports.fold<int>(0, (sum, r) => sum + r.halfDays);
+    final totalMis = reports.fold<int>(0, (sum, r) => sum + r.misDays);
     final totalAbsent = reports.fold<int>(0, (sum, r) => sum + r.absentDays);
     final totalHours = reports.fold<double>(0, (sum, r) => sum + r.totalHours);
 
@@ -450,7 +503,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                   const SizedBox(height: 12),
                   _buildDateNavigator(),
                   const SizedBox(height: 16),
-                  _buildSummaryCards(totalFull, totalHalf, totalAbsent, totalHours),
+                  _buildSummaryCards(totalFull, totalMis, totalAbsent, totalHours),
                   const SizedBox(height: 16),
                   _buildTrendChart(),
                   const SizedBox(height: 20),
@@ -518,7 +571,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
     );
   }
 
-  Widget _buildSummaryCards(int full, int half, int absent, double hours) {
+  Widget _buildSummaryCards(int full, int mis, int absent, double hours) {
     return Row(
       children: [
         Expanded(
@@ -526,7 +579,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
         ),
         const SizedBox(width: 8),
         Expanded(
-          child: _summaryCard("Half Day", half.toString(), Colors.orange),
+          child: _summaryCard("Mis-punch", mis.toString(), Colors.red),
         ),
         const SizedBox(width: 8),
         Expanded(
@@ -696,8 +749,10 @@ class _ReportsScreenState extends State<ReportsScreen> {
     switch (type) {
       case DayType.fullDay:
         return Colors.green;
+      case DayType.misPunch:
+        return Colors.red;
       case DayType.halfDay:
-        return Colors.orange;
+        return Colors.red;
       case DayType.absent:
         return Colors.red;
       default:
@@ -709,8 +764,10 @@ class _ReportsScreenState extends State<ReportsScreen> {
     switch (type) {
       case DayType.fullDay:
         return "Full Day";
+      case DayType.misPunch:
+        return "Mis-punch";
       case DayType.halfDay:
-        return "Half Day";
+        return "Mis-punch";
       case DayType.absent:
         return "Absent";
       default:
@@ -786,7 +843,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 _miniStat("Full", "${r.fullDays}", Colors.green),
-                _miniStat("Half", "${r.halfDays}", Colors.orange),
+                _miniStat("Miss", "${r.misDays}", Colors.red),
                 _miniStat("Absent", "${r.absentDays}", Colors.red),
                 _miniStat(
                   "Hours",
@@ -823,7 +880,7 @@ class _EmployeeReport {
   final String employeeId;
   final String name;
   final int fullDays;
-  final int halfDays;
+  final int misDays;
   final int absentDays;
   final int inProgressDays;
   final double totalHours;
@@ -836,7 +893,7 @@ class _EmployeeReport {
     required this.employeeId,
     required this.name,
     required this.fullDays,
-    required this.halfDays,
+    required this.misDays,
     required this.absentDays,
     required this.inProgressDays,
     required this.totalHours,

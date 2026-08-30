@@ -1,0 +1,35 @@
+{
+  "rules": {
+    "Attendance": {
+      ".read": true,
+      "$employeeId": {
+        "$date": {
+          ".read": true,
+          ".write": true,
+          ".validate": "(!data.exists() && newData.child('employeeId').val() === $employeeId && newData.child('date').val() === $date && newData.child('status').val() === 'Checked In' && newData.hasChild('punchIn') && !newData.hasChild('punchOut')) || (data.exists() && (data.child('status').val() === 'Checked In' || data.child('status').val() === 'Auto Checkout Pending' || data.child('status').val() === 'Auto Checked Out') && newData.child('employeeId').val() === data.child('employeeId').val() && newData.child('date').val() === data.child('date').val() && newData.child('punchIn').val() === data.child('punchIn').val() && (newData.child('status').val() === 'Checked Out' || newData.child('status').val() === 'Auto Checked Out') && newData.hasChild('punchOut')) || (data.exists() && data.child('status').val() === 'Checked Out' && newData.child('employeeId').val() === data.child('employeeId').val() && newData.child('date').val() === data.child('date').val() && newData.child('punchIn').val() === data.child('punchIn').val() && newData.child('punchOut').val() === data.child('punchOut').val()) || (newData.child('employeeId').val() === $employeeId && newData.child('date').val() === $date && newData.hasChild('punchIn') && newData.child('manualEdited').val() === true)"
+        }
+      }
+    },
+    "AttendanceSummary": {
+      ".read": true,
+      "$employeeId": { ".read": true, ".write": true }
+    },
+    "PunchRequests": {
+      ".read": true,
+      "$employeeId": {
+        "$date": { ".read": true, ".write": true }
+      }
+    },
+    "users": { ".read": true, "$employeeId": { ".read": true, ".write": true } },
+    "LeaveRequests": { ".read": true, "$employeeId": { "$requestId": { ".read": true, ".write": true } } },
+    "Notifications": { ".read": true, "$employeeId": { "$notifId": { ".read": true, ".write": true } } },
+    "AdminActivityLog": { ".read": true, ".write": true },
+    "LeaveBalances": { ".read": true, "$employeeId": { ".read": true, ".write": true } },
+    "DeviceApprovalRequests": { ".read": true, "$employeeId": { "$requestId": { ".read": true, ".write": true } } },
+    "AdminNotifications": { ".read": true, ".write": true },
+    "Announcements": { ".read": true, ".write": true },
+    "WorkFromHomeRequests": { ".read": true, "$employeeId": { "$dateKey": { ".read": true, ".write": true } } },
+    "AdminMessages": { ".read": true, "$messageId": { ".read": true, ".write": true } },
+    "PayslipRequests": { ".read": true, "$employeeId": { "$requestId": { ".read": true, ".write": true } } }
+  }
+}

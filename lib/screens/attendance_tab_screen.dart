@@ -48,18 +48,23 @@ class _AttendanceTabScreenState extends State<AttendanceTabScreen> {
     return dateKey == todayKey;
   }
 
+  /// Classification always runs through AttendanceCalculator using the real
+  /// punch-in and punch-out times \u2014 including admin-verified auto
+  /// checkouts. There is no forced full-day override: a verified day is a
+  /// full day only if it actually reaches 9 gross hours.
   DayType? _classify(String dateKey, Map data) {
     final punchIn = data["punchIn"]?.toString();
     final punchOut = data["punchOut"]?.toString();
     if (punchIn == null) return DayType.absent;
     if (punchOut == null) return _isToday(dateKey) ? null : DayType.absent;
-    return AttendanceCalculator.calculate(punchIn: punchIn, punchOut: punchOut).dayType;
+    return AttendanceCalculator.calculate(punchIn: punchIn, punchOut: punchOut, workFromHome: data['workFromHome'] == true).dayType;
   }
 
   Color _dayTypeColor(DayType? type) {
     switch (type) {
       case DayType.fullDay: return AppColors.success;
-      case DayType.halfDay: return AppColors.warning;
+      case DayType.halfDay: return AppColors.danger;
+      case DayType.misPunch: return AppColors.danger;
       case DayType.absent: return AppColors.danger;
       default: return AppColors.info;
     }
@@ -68,7 +73,8 @@ class _AttendanceTabScreenState extends State<AttendanceTabScreen> {
   String _dayTypeText(DayType? type) {
     switch (type) {
       case DayType.fullDay: return "Full Day";
-      case DayType.halfDay: return "Half Day";
+      case DayType.halfDay: return "Mis-punch";
+      case DayType.misPunch: return "Mis-punch";
       case DayType.absent: return "Absent";
       default: return "In Progress";
     }

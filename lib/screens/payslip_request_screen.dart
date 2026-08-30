@@ -108,6 +108,23 @@ class _PayslipRequestScreenState extends State<PayslipRequestScreen> {
     }
   }
 
+  Future<void> _deletePendingRequest(String requestId) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Delete payslip request?'),
+        content: const Text('This request will be removed before it is reviewed by an administrator.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(context, true), style: TextButton.styleFrom(foregroundColor: AppColors.danger), child: const Text('Delete')),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    await dbRef.child('PayslipRequests').child(widget.employeeId).child(requestId).remove();
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Payslip request deleted.')));
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -237,6 +254,12 @@ class _PayslipRequestScreenState extends State<PayslipRequestScreen> {
                           decoration: BoxDecoration(color: _statusColor(status).withOpacity(0.12), borderRadius: BorderRadius.circular(20)),
                           child: Text(_statusLabel(status), style: TextStyle(color: _statusColor(status), fontWeight: FontWeight.bold, fontSize: 11)),
                         ),
+                        if (status == 'pending')
+                          IconButton(
+                            onPressed: () => _deletePendingRequest(e.key.toString()),
+                            icon: const Icon(Icons.delete_outline, color: AppColors.danger),
+                            tooltip: 'Delete request',
+                          ),
                       ],
                     ),
                   );

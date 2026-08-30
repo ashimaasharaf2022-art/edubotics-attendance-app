@@ -50,21 +50,80 @@ class _PersonalReportScreenState extends State<PersonalReportScreen> {
     return List.generate(7, (i) => DateTime(start.year, start.month, start.day + i));
   }
 
+  List<AttendanceSession> _sessionsFromRecord(Map<String, dynamic>? record) {
+    if (record == null) return <AttendanceSession>[];
+
+    final sessions = <AttendanceSession>[];
+    final raw = record["sessions"];
+
+    if (raw is List) {
+      for (final item in raw) {
+        if (item is Map && item["punchIn"] != null) {
+          sessions.add(AttendanceSession(
+            punchIn: item["punchIn"].toString(),
+            punchOut: item["punchOut"]?.toString(),
+          ));
+        }
+      }
+    } else if (raw is Map) {
+      final entries = raw.entries.toList()
+        ..sort((a, b) => a.key.toString().compareTo(b.key.toString()));
+      for (final entry in entries) {
+        final item = entry.value;
+        if (item is Map && item["punchIn"] != null) {
+          sessions.add(AttendanceSession(
+            punchIn: item["punchIn"].toString(),
+            punchOut: item["punchOut"]?.toString(),
+          ));
+        }
+      }
+    }
+
+    if (sessions.isEmpty && record["punchIn"] != null) {
+      sessions.add(AttendanceSession(
+        punchIn: record["punchIn"].toString(),
+        punchOut: record["punchOut"]?.toString(),
+      ));
+    }
+
+    return sessions;
+  }
+
+  AttendanceResult? _calculateSessions(Map<String, dynamic>? record) {
+    final sessions = _sessionsFromRecord(record);
+    if (sessions.isEmpty) return null;
+    return AttendanceCalculator.calculateFromSessions(
+      sessions,
+      workFromHome: record?['workFromHome'] == true,
+    );
+  }
+
   double _hoursFor(String key) {
-    final record = attendance[key];
-    if (record == null) return 0;
-    final punchIn = record["punchIn"]?.toString();
-    final punchOut = record["punchOut"]?.toString();
-    if (punchIn == null || punchOut == null) return 0;
-    return AttendanceCalculator.calculate(punchIn: punchIn, punchOut: punchOut).netHours;
+    return _calculateSessions(attendance[key])?.netHours ?? 0;
   }
 
   DayType _classify(String key) {
     final record = attendance[key];
-    if (record == null || record["punchIn"] == null) return DayType.absent;
-    final punchOut = record["punchOut"]?.toString();
-    if (punchOut == null) return DayType.absent;
-    return AttendanceCalculator.calculate(punchIn: record["punchIn"].toString(), punchOut: punchOut).dayType;
+    final sessions = _sessionsFromRecord(record);
+    if (sessions.isEmpty) return DayType.absent;
+
+    final last = sessions.last;
+    if (last.punchOut == null) return DayType.absent;
+
+    return AttendanceCalculator.calculateFromSessions(
+      sessions,
+      workFromHome: record?['workFromHome'] == true,
+    ).dayType;
+  }
+
+  String _sessionSummary(String key) {
+    final sessions = _sessionsFromRecord(attendance[key]);
+    if (sessions.isEmpty) return '--';
+    return sessions.asMap().entries.map((entry) {
+      final i = entry.key + 1;
+      final s = entry.value;
+      return 'S$i: ${s.punchIn} → ${s.punchOut ?? '--'}';
+    }).join('\n');
   }
 
   @override
@@ -72,7 +131,7 @@ class _PersonalReportScreenState extends State<PersonalReportScreen> {
     final weekDates = _weekDates();
     final labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-    int fullDays = 0, halfDays = 0, absentDays = 0;
+    int fullDays = 0, misDays = 0, absentDays = 0;
     double totalHours = 0;
     final bars = <BarChartGroupData>[];
 
@@ -84,14 +143,22 @@ class _PersonalReportScreenState extends State<PersonalReportScreen> {
       if (!weekDates[i].isAfter(DateTime.now())) {
         final type = _classify(key);
         if (type == DayType.fullDay) fullDays++;
-        else if (type == DayType.halfDay) halfDays++;
-        else absentDays++;
+        else if (type == DayType.misPunch) misDays++;
+        else if (type == DayType.absent) absentDays++;
       }
 
       bars.add(BarChartGroupData(x: i, barRods: [
         BarChartRodData(toY: hours, color: AppColors.primary, width: 16, borderRadius: BorderRadius.circular(4)),
       ]));
     }
+
+    double maxHoursObserved = 0;
+    for (final bar in bars) {
+      if (bar.barRods.isNotEmpty && bar.barRods.first.toY > maxHoursObserved) {
+        maxHoursObserved = bar.barRods.first.toY;
+      }
+    }
+    final dynamicMaxY = (maxHoursObserved > 9.0) ? (maxHoursObserved + 2.0).ceilToDouble() : 10.0;
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -137,30 +204,71 @@ class _PersonalReportScreenState extends State<PersonalReportScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text("Working Hours", style: TextStyle(fontWeight: FontWeight.bold)),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              const Text("Working Hours", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+                              Text("Max: ${dynamicMaxY.toInt()}h", style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+                            ],
+                          ),
                           const SizedBox(height: 16),
                           SizedBox(
                             height: 180,
-                            child: BarChart(
-                              BarChartData(
-                                maxY: 10,
-                                gridData: const FlGridData(show: false),
-                                borderData: FlBorderData(show: false),
-                                titlesData: FlTitlesData(
-                                  leftTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                                  topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                                  rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                                  bottomTitles: AxisTitles(
-                                    sideTitles: SideTitles(
-                                      showTitles: true,
-                                      getTitlesWidget: (v, m) => Padding(
-                                        padding: const EdgeInsets.only(top: 6),
-                                        child: Text(labels[v.toInt() % 7], style: const TextStyle(fontSize: 11, color: AppColors.textSecondary)),
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: BarChart(
+                                BarChartData(
+                                  maxY: dynamicMaxY,
+                                  minY: 0,
+                                  gridData: FlGridData(
+                                    show: true,
+                                    drawVerticalLine: false,
+                                    horizontalInterval: dynamicMaxY / 4 > 0 ? dynamicMaxY / 4 : 2.5,
+                                    getDrawingHorizontalLine: (_) => FlLine(
+                                      color: AppColors.divider.withOpacity(0.5),
+                                      strokeWidth: 1,
+                                      dashArray: [4, 4],
+                                    ),
+                                  ),
+                                  borderData: FlBorderData(show: false),
+                                  titlesData: FlTitlesData(
+                                    leftTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                                    topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                                    rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                                    bottomTitles: AxisTitles(
+                                      sideTitles: SideTitles(
+                                        showTitles: true,
+                                        getTitlesWidget: (v, m) => Padding(
+                                          padding: const EdgeInsets.only(top: 6),
+                                          child: Text(labels[v.toInt() % 7], style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
+                                        ),
                                       ),
                                     ),
                                   ),
+                                  barGroups: bars.map((group) {
+                                    final rod = group.barRods.first;
+                                    return BarChartGroupData(
+                                      x: group.x,
+                                      barRods: [
+                                        BarChartRodData(
+                                          toY: rod.toY,
+                                          gradient: const LinearGradient(
+                                            begin: Alignment.bottomCenter,
+                                            end: Alignment.topCenter,
+                                            colors: [AppColors.indigo, AppColors.brightBlue],
+                                          ),
+                                          width: 16,
+                                          borderRadius: const BorderRadius.vertical(top: Radius.circular(5)),
+                                          backDrawRodData: BackgroundBarChartRodData(
+                                            show: true,
+                                            toY: dynamicMaxY,
+                                            color: AppColors.background.withOpacity(0.6),
+                                          ),
+                                        ),
+                                      ],
+                                    );
+                                  }).toList(),
                                 ),
-                                barGroups: bars,
                               ),
                             ),
                           ),
@@ -174,7 +282,7 @@ class _PersonalReportScreenState extends State<PersonalReportScreen> {
                       children: [
                         Expanded(child: _statCard("Full", "$fullDays", AppColors.success, AppColors.successLight)),
                         const SizedBox(width: 10),
-                        Expanded(child: _statCard("Half", "$halfDays", AppColors.warning, AppColors.warningLight)),
+                        Expanded(child: _statCard("Miss", "$misDays", AppColors.danger, AppColors.dangerLight)),
                         const SizedBox(width: 10),
                         Expanded(child: _statCard("Absent", "$absentDays", AppColors.danger, AppColors.dangerLight)),
                       ],

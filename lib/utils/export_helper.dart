@@ -1,9 +1,10 @@
-import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:flutter/services.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:excel/excel.dart' as ex;
-import 'package:path_provider/path_provider.dart';
-import 'package:share_plus/share_plus.dart';
+
 import '../utils/attendance_calculator.dart';
 
 class ExportRow {
@@ -31,18 +32,15 @@ class ExportRow {
 }
 
 class ExportHelper {
-  static Future<File> _writeToDownloads(String filename, List<int> bytes) async {
-    final dir = await getApplicationDocumentsDirectory();
-    final file = File(dir.path + "/" + filename);
-    await file.writeAsBytes(bytes);
-    return file;
-  }
+  static const MethodChannel _downloadChannel =
+      MethodChannel('workora/downloads');
 
   static List<String> _rowToStrings(ExportRow r, bool isDaily) {
     if (isDaily) {
-      final inTime = r.lastPunchIn == null ? "--" : r.lastPunchIn!;
-      final outTime = r.lastPunchOut == null ? "--" : r.lastPunchOut!;
-      final statusText = r.lastStatus == null ? "Not Checked In" : r.lastStatus!;
+      final inTime = r.lastPunchIn ?? "--";
+      final outTime = r.lastPunchOut ?? "--";
+      final statusText = r.lastStatus ?? "Not Checked In";
+
       return [
         r.name,
         r.employeeId,
@@ -51,16 +49,32 @@ class ExportHelper {
         statusText,
         AttendanceCalculator.formatHours(r.totalHours),
       ];
-    } else {
-      return [
-        r.name,
-        r.employeeId,
-        r.fullDays.toString(),
-        r.halfDays.toString(),
-        r.absentDays.toString(),
-        AttendanceCalculator.formatHours(r.totalHours),
-      ];
     }
+
+    return [
+      r.name,
+      r.employeeId,
+      r.fullDays.toString(),
+      r.halfDays.toString(),
+      r.absentDays.toString(),
+      AttendanceCalculator.formatHours(r.totalHours),
+    ];
+  }
+
+  static Future<String> _saveToDownloads({
+    required String method,
+    required String fileName,
+    required List<int> bytes,
+  }) async {
+    final result = await _downloadChannel.invokeMethod<String>(
+      method,
+      {
+        "fileName": fileName,
+        "bytes": Uint8List.fromList(bytes),
+      },
+    );
+
+    return result ?? "Saved to Downloads/Workora/$fileName";
   }
 
   static Future<void> exportPdf({
@@ -75,26 +89,34 @@ class ExportHelper {
         ? ["Employee", "ID", "In", "Out", "Status", "Hours"]
         : ["Employee", "ID", "Full", "Half", "Absent", "Hours"];
 
-    final tableData = rows.map((r) => _rowToStrings(r, isDaily)).toList();
+    final tableData =
+        rows.map((r) => _rowToStrings(r, isDaily)).toList();
 
     doc.addPage(
       pw.MultiPage(
         pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.all(32),
         build: (context) {
           return [
             pw.Header(
               level: 0,
               child: pw.Text(
                 title,
-                style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold),
+                style: pw.TextStyle(
+                  fontSize: 20,
+                  fontWeight: pw.FontWeight.bold,
+                ),
               ),
             ),
             pw.Text(
               periodLabel,
-              style: const pw.TextStyle(fontSize: 12, color: PdfColors.grey700),
+              style: const pw.TextStyle(
+                fontSize: 12,
+                color: PdfColors.grey700,
+              ),
             ),
             pw.SizedBox(height: 16),
-            pw.Table.fromTextArray(
+            pw.TableHelper.fromTextArray(
               headers: headers,
               data: tableData,
               headerStyle: pw.TextStyle(
@@ -105,12 +127,22 @@ class ExportHelper {
                 color: PdfColor.fromInt(0xFF2563EB),
               ),
               cellAlignment: pw.Alignment.centerLeft,
-              cellPadding: const pw.EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+              cellPadding: const pw.EdgeInsets.symmetric(
+                horizontal: 6,
+                vertical: 6,
+              ),
+              border: pw.TableBorder.all(
+                color: PdfColor.fromInt(0xFFD9E1EE),
+                width: 0.5,
+              ),
             ),
             pw.SizedBox(height: 20),
             pw.Text(
-              "Generated on " + DateTime.now().toString().split(".").first,
-              style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey500),
+              "Generated on ${DateTime.now().toString().split(".").first}",
+              style: const pw.TextStyle(
+                fontSize: 9,
+                color: PdfColors.grey500,
+              ),
             ),
           ];
         },
@@ -118,15 +150,14 @@ class ExportHelper {
     );
 
     final bytes = await doc.save();
-    final filename = "attendance_report_" +
-        DateTime.now().millisecondsSinceEpoch.toString() +
-        ".pdf";
-    final file = await _writeToDownloads(filename, bytes);
 
-    await Share.shareXFiles(
-      [XFile(file.path)],
-      subject: title,
-      text: "Attendance report: " + periodLabel,
+    final fileName =
+        "attendance_report_${DateTime.now().millisecondsSinceEpoch}.pdf";
+
+    await _saveToDownloads(
+      method: "savePdfToDownloads",
+      fileName: fileName,
+      bytes: bytes,
     );
   }
 
@@ -145,27 +176,38 @@ class ExportHelper {
 
     final headers = isDaily
         ? ["Employee", "ID", "In", "Out", "Status", "Hours"]
-        : ["Employee", "ID", "Full Days", "Half Days", "Absent Days", "Total Hours"];
+        : [
+            "Employee",
+            "ID",
+            "Full Days",
+            "Half Days",
+            "Absent Days",
+            "Total Hours",
+          ];
 
-    sheet.appendRow(headers.map((h) => ex.TextCellValue(h)).toList());
+    sheet.appendRow(
+      headers.map((h) => ex.TextCellValue(h)).toList(),
+    );
 
-    for (final r in rows) {
-      final rowStrings = _rowToStrings(r, isDaily);
-      sheet.appendRow(rowStrings.map((s) => ex.TextCellValue(s)).toList());
+    for (final row in rows) {
+      final values = _rowToStrings(row, isDaily);
+      sheet.appendRow(
+        values.map((value) => ex.TextCellValue(value)).toList(),
+      );
     }
 
     final bytes = workbook.encode();
-    if (bytes == null) return;
+    if (bytes == null) {
+      throw Exception("Could not generate Excel file.");
+    }
 
-    final filename = "attendance_report_" +
-        DateTime.now().millisecondsSinceEpoch.toString() +
-        ".xlsx";
-    final file = await _writeToDownloads(filename, bytes);
+    final fileName =
+        "attendance_report_${DateTime.now().millisecondsSinceEpoch}.xlsx";
 
-    await Share.shareXFiles(
-      [XFile(file.path)],
-      subject: title,
-      text: "Attendance report: " + periodLabel,
+    await _saveToDownloads(
+      method: "saveExcelToDownloads",
+      fileName: fileName,
+      bytes: bytes,
     );
   }
 }

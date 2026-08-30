@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_database/firebase_database.dart';
@@ -8,6 +9,7 @@ import '../utils/attendance_calculator.dart';
 import '../utils/location_helper.dart';
 import '../utils/time_integrity_helper.dart';
 import '../utils/work_schedule.dart';
+import '../utils/auto_checkout_fallback.dart';
 import '../utils/notification_center.dart';
 import '../utils/progress_painters.dart';
 import 'leave_screen.dart';
@@ -17,6 +19,8 @@ import 'personal_report_screen.dart';
 import 'announcement_detail_screen.dart';
 import 'payslip_request_screen.dart';
 import 'live_location_screen.dart';
+import 'profile_screen.dart';
+import 'account_settings_screen.dart';
 
 // Dark palette used only for this screen's hero header, to match the
 // reference design without changing the app's global light theme.
@@ -37,11 +41,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
   late DatabaseReference dbRef;
 
   String employeeName = "";
+  String? employeePhotoBase64;
 
   bool showHomeTab = false;
-  // Which mode today's check-in actually used — null until checked in.
-  // Once set, the other tab is locked until check-out so a punch can't
-  // straddle both Office and Work From Home in the same day.
   bool? checkedInAsWfh;
   bool isLoading = true;
   bool isSubmitting = false;
@@ -52,10 +54,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
   String punchInTime = "--:--";
   String punchOutTime = "--:--";
   String status = "Not Checked In";
+  List<AttendanceSession> _todaySessions = <AttendanceSession>[];
   String workingHours = "0 hr 0 min";
   DayType? dayType;
 
   String? wfhStatusToday;
+  String? pendingAutoCheckoutDate;
   String? lunchBreakStart;
   String? lunchBreakEnd;
   String? teaBreakStart;
@@ -83,15 +87,26 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     _loadEmployeeInfo();
     _loadTodayAttendance();
+    AutoCheckoutFallback.reconcilePreviousDay(widget.employeeId).then((_) => _loadTodayAttendance());
     _refreshLocation();
     _loadMonthlyAttendance();
   }
 
- @override
-void dispose() {
-  _clockTimer?.cancel();
-  super.dispose();
-}
+  @override
+  void dispose() {
+    _clockTimer?.cancel();
+    super.dispose();
+  }
+
+  void _openAccountSettings() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => AccountSettingsScreen(
+          employeeId: widget.employeeId,
+        ),
+      ),
+    );
+  }
 
   Future<void> _loadEmployeeInfo() async {
     try {
@@ -100,7 +115,11 @@ void dispose() {
       if (snapshot.exists) {
         final data = Map<dynamic, dynamic>.from(snapshot.value as Map);
         final name = (data["name"] ?? widget.employeeId).toString();
-        setState(() => employeeName = name);
+        final photo = data["photoBase64"]?.toString();
+        setState(() {
+          employeeName = name;
+          employeePhotoBase64 = photo;
+        });
         widget.onNameLoaded?.call(name);
       }
     } catch (_) {}
@@ -112,50 +131,125 @@ void dispose() {
   }
 
   void _updateClassification() {
-    if (punchInTime == "--:--" || punchOutTime == "--:--") {
+    if (_todaySessions.isEmpty) {
       dayType = null;
       workingHours = "0 hr 0 min";
       return;
     }
-    final result = AttendanceCalculator.calculate(punchIn: punchInTime, punchOut: punchOutTime);
+
+    final result = AttendanceCalculator.calculateFromSessions(
+      _todaySessions,
+      workFromHome: checkedInAsWfh ?? false,
+    );
     dayType = result.dayType;
     workingHours = AttendanceCalculator.formatHours(result.netHours);
   }
 
   Future<void> _loadTodayAttendance() async {
     try {
-      final snapshot = await dbRef.child("Attendance").child(widget.employeeId).child(getDateKey()).get();
+      final snapshot = await dbRef
+          .child("Attendance")
+          .child(widget.employeeId)
+          .child(getDateKey())
+          .get();
+
       if (!mounted) return;
 
       if (!snapshot.exists) {
-        setState(() => checkedInAsWfh = null);
-      }
-
-      if (snapshot.exists) {
-        final data = Map<dynamic, dynamic>.from(snapshot.value as Map);
         setState(() {
-          punchInTime = data["punchIn"] ?? "--:--";
-          punchOutTime = data["punchOut"] ?? "--:--";
-          status = data["status"] ?? "Not Checked In";
+          _todaySessions = <AttendanceSession>[];
+          punchInTime = "--:--";
+          punchOutTime = "--:--";
+          status = "Not Checked In";
+          checkedInAsWfh = null;
+          lunchBreakStart = null;
+          lunchBreakEnd = null;
+          teaBreakStart = null;
+          teaBreakEnd = null;
+          dayType = null;
+          workingHours = "0 hr 0 min";
+        });
+      } else {
+        final data = Map<dynamic, dynamic>.from(snapshot.value as Map);
+
+        final sessions = <AttendanceSession>[];
+        final rawSessions = data["sessions"];
+
+        if (rawSessions is List) {
+          for (final raw in rawSessions) {
+            if (raw is Map && raw["punchIn"] != null) {
+              sessions.add(
+                AttendanceSession(
+                  punchIn: raw["punchIn"].toString(),
+                  punchOut: raw["punchOut"]?.toString(),
+                ),
+              );
+            }
+          }
+        } else if (rawSessions is Map) {
+          final entries = rawSessions.entries.toList()
+            ..sort((a, b) => a.key.toString().compareTo(b.key.toString()));
+          for (final entry in entries) {
+            final raw = entry.value;
+            if (raw is Map && raw["punchIn"] != null) {
+              sessions.add(
+                AttendanceSession(
+                  punchIn: raw["punchIn"].toString(),
+                  punchOut: raw["punchOut"]?.toString(),
+                ),
+              );
+            }
+          }
+        }
+
+        // Backward compatibility with old single-session records.
+        if (sessions.isEmpty && data["punchIn"] != null) {
+          sessions.add(
+            AttendanceSession(
+              punchIn: data["punchIn"].toString(),
+              punchOut: data["punchOut"]?.toString(),
+            ),
+          );
+        }
+
+        final last = sessions.isEmpty ? null : sessions.last;
+        final hasOpenSession = last != null && last.punchOut == null;
+
+        setState(() {
+          _todaySessions = sessions;
+          punchInTime = last?.punchIn ?? "--:--";
+          punchOutTime = hasOpenSession ? "--:--" : (last?.punchOut ?? "--:--");
+          status = sessions.isEmpty
+              ? "Not Checked In"
+              : (hasOpenSession ? "Checked In" : "Checked Out");
+
           lunchBreakStart = data["lunchBreakStart"]?.toString();
           lunchBreakEnd = data["lunchBreakEnd"]?.toString();
           teaBreakStart = data["teaBreakStart"]?.toString();
           teaBreakEnd = data["teaBreakEnd"]?.toString();
-          if (data.containsKey("workFromHome") && status != "Not Checked In") {
+
+          if (data.containsKey("workFromHome") && sessions.isNotEmpty) {
             checkedInAsWfh = data["workFromHome"] == true;
             showHomeTab = checkedInAsWfh!;
           }
+
           _updateClassification();
         });
       }
 
-      final wfhSnap = await dbRef.child("WorkFromHomeRequests").child(widget.employeeId).child(getDateKey()).get();
+      final wfhSnap = await dbRef
+          .child("WorkFromHomeRequests")
+          .child(widget.employeeId)
+          .child(getDateKey())
+          .get();
+
       if (wfhSnap.exists) {
         final wfhData = Map<dynamic, dynamic>.from(wfhSnap.value as Map);
         if (!mounted) return;
         setState(() {
           wfhStatusToday = wfhData["status"]?.toString();
-          if (checkedInAsWfh == null && (wfhStatusToday == "approved" || wfhStatusToday == "pending")) {
+          if (checkedInAsWfh == null &&
+              (wfhStatusToday == "approved" || wfhStatusToday == "pending")) {
             showHomeTab = true;
           }
         });
@@ -207,19 +301,30 @@ void dispose() {
     for (DateTime d = monthStart; !d.isAfter(lastDay); d = d.add(const Duration(days: 1))) {
       final key = getDateKey(d);
       final record = allAttendance[key];
-      final isToday = getDateKey(d) == getDateKey();
+      final isToday = key == getDateKey();
 
-      if (record == null || record["punchIn"] == null) {
+      if (record == null) {
         absent++;
         continue;
       }
-      final punchOut = record["punchOut"]?.toString();
-      if (punchOut == null) {
-        if (isToday) continue;
+
+      final sessions = _sessionsFromRecord(record);
+      if (sessions.isEmpty) {
         absent++;
         continue;
       }
-      final result = AttendanceCalculator.calculate(punchIn: record["punchIn"].toString(), punchOut: punchOut);
+
+      final hasOpen = sessions.last.punchOut == null;
+      if (hasOpen) {
+        if (!isToday) absent++;
+        continue;
+      }
+
+      final result = AttendanceCalculator.calculateFromSessions(
+        sessions,
+        workFromHome: record['workFromHome'] == true,
+      );
+
       if (result.dayType == DayType.fullDay) {
         full++;
       } else if (result.dayType == DayType.halfDay) {
@@ -229,6 +334,7 @@ void dispose() {
       }
     }
 
+    if (!mounted) return;
     setState(() {
       fullDayCount = full;
       halfDayCount = half;
@@ -292,6 +398,81 @@ void dispose() {
     setState(() => wfhStatusToday = "pending");
   }
 
+  List<AttendanceSession> _sessionsFromRecord(Map<dynamic, dynamic> record) {
+    final sessions = <AttendanceSession>[];
+    final raw = record["sessions"];
+
+    if (raw is List) {
+      for (final item in raw) {
+        if (item is Map && item["punchIn"] != null) {
+          sessions.add(
+            AttendanceSession(
+              punchIn: item["punchIn"].toString(),
+              punchOut: item["punchOut"]?.toString(),
+            ),
+          );
+        }
+      }
+    } else if (raw is Map) {
+      final entries = raw.entries.toList()
+        ..sort((a, b) => a.key.toString().compareTo(b.key.toString()));
+      for (final entry in entries) {
+        final item = entry.value;
+        if (item is Map && item["punchIn"] != null) {
+          sessions.add(
+            AttendanceSession(
+              punchIn: item["punchIn"].toString(),
+              punchOut: item["punchOut"]?.toString(),
+            ),
+          );
+        }
+      }
+    }
+
+    if (sessions.isEmpty && record["punchIn"] != null) {
+      sessions.add(
+        AttendanceSession(
+          punchIn: record["punchIn"].toString(),
+          punchOut: record["punchOut"]?.toString(),
+        ),
+      );
+    }
+
+    return sessions;
+  }
+
+  List<Map<String, dynamic>> _sessionMapsFromRecord(Map<dynamic, dynamic> record) {
+    final raw = record["sessions"];
+    final result = <Map<String, dynamic>>[];
+
+    if (raw is List) {
+      for (final item in raw) {
+        if (item is Map && item["punchIn"] != null) {
+          result.add(Map<String, dynamic>.from(item));
+        }
+      }
+    } else if (raw is Map) {
+      final entries = raw.entries.toList()
+        ..sort((a, b) => a.key.toString().compareTo(b.key.toString()));
+      for (final entry in entries) {
+        final item = entry.value;
+        if (item is Map && item["punchIn"] != null) {
+          result.add(Map<String, dynamic>.from(item));
+        }
+      }
+    }
+
+    if (result.isEmpty && record["punchIn"] != null) {
+      result.add({
+        "punchIn": record["punchIn"],
+        if (record["punchOut"] != null) "punchOut": record["punchOut"],
+        "workFromHome": record["workFromHome"] == true,
+      });
+    }
+
+    return result;
+  }
+
   Future<bool> _passesIntegrityChecks() async {
     if (locationStatus == LocationStatus.mockDetected) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -314,19 +495,36 @@ void dispose() {
 
   Future<void> _punchIn({required bool bypassGeofence}) async {
     if (isSubmitting) return;
-    if (status == "Checked In" || status == "Checked Out") return;
 
-    if (!bypassGeofence && (currentLocation == null || !currentLocation!.isWithinOfficeRange)) {
+    // Multiple sessions are allowed. Only an already-open session blocks
+    // another check-in.
+    if (status == "Checked In") return;
+
+    if (!bypassGeofence && !WorkSchedule.canCheckIn) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Office check-in is available only from 8:00 AM to 12:00 AM.')),
+      );
+      return;
+    }
+
+    if (!bypassGeofence &&
+        (currentLocation == null || !currentLocation!.isWithinOfficeRange)) {
       final distance = currentLocation?.distanceFromOffice.round() ?? 0;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(currentLocation == null ? "Unable to verify location" : "You're ${distance}m from the office")),
+        SnackBar(
+          content: Text(
+            currentLocation == null
+                ? "Unable to verify location"
+                : "You're ${distance}m from the office",
+          ),
+        ),
       );
       return;
     }
 
     setState(() => isSubmitting = true);
     if (!await _passesIntegrityChecks()) {
-      setState(() => isSubmitting = false);
+      if (mounted) setState(() => isSubmitting = false);
       return;
     }
 
@@ -337,51 +535,69 @@ void dispose() {
 
     try {
       final result = await dayRef.runTransaction((Object? currentData) {
-        final data = currentData == null ? <String, dynamic>{} : Map<String, dynamic>.from(currentData as Map);
-        final currentStatus = data["status"] ?? "Not Checked In";
-        // Transactions can be retried by Firebase. Returning the already-written
-        // data makes a successful tap idempotent instead of cancelling it.
-        if (currentStatus == "Checked In" && data["punchIn"] != null) return Transaction.success(data);
-        if (currentStatus == "Checked Out") return Transaction.abort();
+        final data = currentData == null
+            ? <String, dynamic>{}
+            : Map<String, dynamic>.from(currentData as Map);
+
+        final sessions = _sessionMapsFromRecord(data);
+
+        // Never create two open sessions.
+        if (sessions.isNotEmpty && sessions.last["punchOut"] == null) {
+          return Transaction.abort();
+        }
+
+        sessions.add({
+          "punchIn": time,
+          "workFromHome": bypassGeofence,
+          if (location != null && !bypassGeofence) ...{
+            "punchInLat": location.latitude,
+            "punchInLng": location.longitude,
+            "punchInAddress": location.address,
+          },
+          if (bypassGeofence) "punchInAddress": "Work From Home",
+        });
 
         data["employeeId"] = widget.employeeId;
         data["date"] = date;
+        data["sessions"] = sessions;
+
+        // Keep these legacy summary fields synchronized for existing screens,
+        // reports, and backward compatibility. They represent the LAST session.
         data["punchIn"] = time;
+        data["punchOut"] = null;
         data["status"] = "Checked In";
         data["workFromHome"] = bypassGeofence;
         data["shiftType"] = WorkSchedule.shiftName;
 
-        if (bypassGeofence) {
-          data["punchInAddress"] = "Work From Home";
-        } else if (location != null) {
-          data["punchInLat"] = location.latitude;
-          data["punchInLng"] = location.longitude;
-          data["punchInAddress"] = location.address;
-        }
         return Transaction.success(data);
       });
 
       if (!mounted) return;
       if (!result.committed) {
         await _loadTodayAttendance();
-        setState(() => isSubmitting = false);
+        if (mounted) setState(() => isSubmitting = false);
         return;
       }
 
       setState(() {
+        _todaySessions = [
+          ..._todaySessions,
+          AttendanceSession(punchIn: time),
+        ];
         punchInTime = time;
+        punchOutTime = "--:--";
         status = "Checked In";
         checkedInAsWfh = bypassGeofence;
         isSubmitting = false;
+        _updateClassification();
       });
 
       await NotificationCenter.sendAdmin(
         title: "Employee Checked In",
         message: "$employeeName checked in at $time${bypassGeofence ? ' (Work From Home)' : ''}.",
       );
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => isSubmitting = false);
+    } catch (_) {
+      if (mounted) setState(() => isSubmitting = false);
     }
   }
 
@@ -389,17 +605,31 @@ void dispose() {
     if (isSubmitting) return;
     if (status != "Checked In") return;
 
-    if (!bypassGeofence && (currentLocation == null || !currentLocation!.isWithinOfficeRange)) {
+    if (!bypassGeofence && !WorkSchedule.canCheckOut) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Office check-out is available only until 12:00 AM.')),
+      );
+      return;
+    }
+
+    if (!bypassGeofence &&
+        (currentLocation == null || !currentLocation!.isWithinOfficeRange)) {
       final distance = currentLocation?.distanceFromOffice.round() ?? 0;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(currentLocation == null ? "Unable to verify location" : "You're ${distance}m from the office")),
+        SnackBar(
+          content: Text(
+            currentLocation == null
+                ? "Unable to verify location"
+                : "You're ${distance}m from the office",
+          ),
+        ),
       );
       return;
     }
 
     setState(() => isSubmitting = true);
     if (!await _passesIntegrityChecks()) {
-      setState(() => isSubmitting = false);
+      if (mounted) setState(() => isSubmitting = false);
       return;
     }
 
@@ -411,47 +641,176 @@ void dispose() {
     try {
       final result = await dayRef.runTransaction((Object? currentData) {
         if (currentData == null) return Transaction.abort();
-        final data = Map<String, dynamic>.from(currentData as Map);
-        // Firebase may call this handler more than once. Do not abort a retry
-        // after a checkout has already been written.
-        if (data["status"] == "Checked Out" && data["punchOut"] != null) return Transaction.success(data);
-        if (data["status"] != "Checked In") return Transaction.abort();
 
-        data["punchOut"] = time;
-        data["status"] = "Checked Out";
-        if (bypassGeofence) {
-          data["punchOutAddress"] = "Work From Home";
-        } else if (location != null) {
-          data["punchOutLat"] = location.latitude;
-          data["punchOutLng"] = location.longitude;
-          data["punchOutAddress"] = location.address;
+        final data = Map<String, dynamic>.from(currentData as Map);
+        final sessions = _sessionMapsFromRecord(data);
+
+        if (sessions.isEmpty || sessions.last["punchOut"] != null) {
+          return Transaction.abort();
         }
+
+        final last = Map<String, dynamic>.from(sessions.last);
+        last["punchOut"] = time;
+
+        if (bypassGeofence) {
+          last["punchOutAddress"] = "Work From Home";
+        } else if (location != null) {
+          last["punchOutLat"] = location.latitude;
+          last["punchOutLng"] = location.longitude;
+          last["punchOutAddress"] = location.address;
+        }
+
+        sessions[sessions.length - 1] = last;
+
+        final attendanceSessions = sessions
+            .map(
+              (s) => AttendanceSession(
+                punchIn: s["punchIn"].toString(),
+                punchOut: s["punchOut"]?.toString(),
+              ),
+            )
+            .toList();
+
+        final attendance = AttendanceCalculator.calculateFromSessions(
+          attendanceSessions,
+          workFromHome: data["workFromHome"] == true,
+        );
+
+        data["sessions"] = sessions;
+
+        // Legacy summary fields always represent the LAST completed session.
+        data["punchIn"] = last["punchIn"];
+        data["punchOut"] = last["punchOut"];
+        data["status"] = "Checked Out";
+        data["attendanceStatus"] = attendance.label;
+        data["netWorkMinutes"] = (attendance.netHours * 60).round();
+        data["shortfallMinutes"] = (attendance.shortfallHours * 60).round();
+        data["extraWorkMinutes"] = (attendance.extraHours * 60).round();
+
         return Transaction.success(data);
       });
 
       if (!mounted) return;
       if (!result.committed) {
         await _loadTodayAttendance();
-        setState(() => isSubmitting = false);
+        if (mounted) setState(() => isSubmitting = false);
         return;
       }
 
+      final updatedSessions = _todaySessions.isEmpty
+          ? <AttendanceSession>[]
+          : [
+              ..._todaySessions.sublist(0, _todaySessions.length - 1),
+              AttendanceSession(
+                punchIn: _todaySessions.last.punchIn,
+                punchOut: time,
+              ),
+            ];
+
       setState(() {
+        _todaySessions = updatedSessions;
         punchOutTime = time;
         status = "Checked Out";
-        _updateClassification();
         isSubmitting = false;
+        _updateClassification();
       });
-      _loadMonthlyAttendance();
+
+      await _loadMonthlyAttendance();
+
+      final attendance = AttendanceCalculator.calculateFromSessions(
+        _todaySessions,
+        workFromHome: checkedInAsWfh ?? false,
+      );
+
+      if (attendance.dayType == DayType.misPunch) {
+        await dbRef
+            .child('PunchRequests')
+            .child(widget.employeeId)
+            .child(date)
+            .set({
+          'employeeId': widget.employeeId,
+          'date': date,
+          'type': 'mis_punch',
+          'status': 'pending',
+          'shortfallMinutes': (attendance.shortfallHours * 60).round(),
+          'message':
+              'Worked ${AttendanceCalculator.formatHours(attendance.netHours)}; 9 hours are required.',
+          'createdAt': DateTime.now().toIso8601String(),
+        });
+      }
+
+      final requestsSnap =
+          await dbRef.child('PunchRequests').child(widget.employeeId).get();
+      if (requestsSnap.exists) {
+        final requests = Map<dynamic, dynamic>.from(requestsSnap.value as Map);
+        String? pendingDate;
+        requests.forEach((dateKey, value) {
+          final request = Map<dynamic, dynamic>.from(value as Map);
+          if (request['type'] == 'auto_checkout' &&
+              request['status'] == 'pending') {
+            pendingDate = dateKey.toString();
+          }
+        });
+        if (mounted) setState(() => pendingAutoCheckoutDate = pendingDate);
+      }
+
+      await _updateCompensationBalance(date);
 
       await NotificationCenter.sendAdmin(
         title: "Employee Checked Out",
         message: "$employeeName checked out at $time.",
       );
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => isSubmitting = false);
+    } catch (_) {
+      if (mounted) setState(() => isSubmitting = false);
     }
+  }
+
+  Future<void> _updateCompensationBalance(String currentDate) async {
+    final snapshot =
+        await dbRef.child('Attendance').child(widget.employeeId).get();
+    if (!snapshot.exists) return;
+
+    final records = Map<dynamic, dynamic>.from(snapshot.value as Map);
+    final dates = records.keys.map((key) => key.toString()).toList()..sort();
+
+    var balance = 0;
+
+    for (final key in dates) {
+      final record = Map<dynamic, dynamic>.from(records[key] as Map);
+      final sessions = _sessionsFromRecord(record);
+
+      if (sessions.isEmpty ||
+          sessions.last.punchOut == null ||
+          record['workFromHome'] == true ||
+          record['attendanceOverride'] == 'Full Day Approved') {
+        continue;
+      }
+
+      final result = AttendanceCalculator.calculateFromSessions(
+        sessions,
+        workFromHome: record['workFromHome'] == true,
+      );
+
+      balance = (balance +
+              (result.shortfallHours * 60).round() -
+              (result.extraHours * 60).round())
+          .clamp(0, 1 << 30)
+          .toInt();
+    }
+
+    await dbRef
+        .child('AttendanceSummary')
+        .child(widget.employeeId)
+        .update({
+      'outstandingMinutes': balance,
+      'updatedAt': DateTime.now().toIso8601String(),
+    });
+
+    await dbRef
+        .child('Attendance')
+        .child(widget.employeeId)
+        .child(currentDate)
+        .update({'outstandingBalanceMinutes': balance});
   }
 
   Future<void> _recordBreak({required bool isLunch, required bool start}) async {
@@ -481,10 +840,6 @@ void dispose() {
     }
   }
 
-  // ---------------------------------------------------------------------
-  // Derived values for the redesigned hero card (shift progress, break time)
-  // ---------------------------------------------------------------------
-
   int? _parseTimeToMinutes(String? t) {
     if (t == null || t == "--:--") return null;
     try {
@@ -505,7 +860,7 @@ void dispose() {
 
   int _timeOfDayMinutes(TimeOfDay t) => t.hour * 60 + t.minute;
 
-  int get _shiftTotalMinutes => _timeOfDayMinutes(WorkSchedule.shiftEnd) - _timeOfDayMinutes(WorkSchedule.checkInStart);
+  int get _shiftTotalMinutes => WorkSchedule.requiredWorkMinutes;
 
   int get _breakBudgetMinutes {
     final lunch = _timeOfDayMinutes(WorkSchedule.lunchEnd) - _timeOfDayMinutes(WorkSchedule.lunchStart);
@@ -541,25 +896,39 @@ void dispose() {
   }
 
   int get _workingMinutesLive {
-    if (status == "Checked Out") {
-      final pin = _parseTimeToMinutes(punchInTime);
-      final pout = _parseTimeToMinutes(punchOutTime);
-      if (pin == null || pout == null) return 0;
-      final gross = (pout - pin).clamp(0, 1000);
-      return (gross - _breakMinutesTaken).clamp(0, 1000);
+    if (_todaySessions.isEmpty) return 0;
+
+    final sessions = <AttendanceSession>[];
+
+    for (final session in _todaySessions) {
+      sessions.add(session);
     }
-    if (status == "Checked In") {
-      final pin = _parseTimeToMinutes(punchInTime);
-      if (pin == null) return 0;
-      final nowMinutes = _now.hour * 60 + _now.minute;
-      // Cap at shift end (6:00 PM) so the ring/progress completes there
-      // instead of continuing to climb if the employee forgets to check out.
-      final shiftEndMinutes = _timeOfDayMinutes(WorkSchedule.shiftEnd);
-      final effectiveNowMinutes = nowMinutes > shiftEndMinutes ? shiftEndMinutes : nowMinutes;
-      final gross = (effectiveNowMinutes - pin).clamp(0, 1000);
-      return (gross - _breakMinutesTaken).clamp(0, 1000);
+
+    // If the current session is open, calculate through the current minute
+    // for the live dashboard only. The saved attendance is still closed only
+    // when the employee explicitly checks out.
+    if (status == "Checked In" && sessions.last.punchOut == null) {
+      final nowText = TimeOfDay.fromDateTime(_now).format(context);
+      final liveSessions = [
+        ...sessions.sublist(0, sessions.length - 1),
+        AttendanceSession(
+          punchIn: sessions.last.punchIn,
+          punchOut: nowText,
+        ),
+      ];
+
+      final result = AttendanceCalculator.calculateFromSessions(
+        liveSessions,
+        workFromHome: checkedInAsWfh ?? false,
+      );
+      return (result.netHours * 60).round();
     }
-    return 0;
+
+    final result = AttendanceCalculator.calculateFromSessions(
+      sessions,
+      workFromHome: checkedInAsWfh ?? false,
+    );
+    return (result.netHours * 60).round();
   }
 
   double get _shiftProgress => _shiftTotalMinutes <= 0 ? 0 : (_workingMinutesLive / _shiftTotalMinutes).clamp(0.0, 1.0);
@@ -579,9 +948,6 @@ void dispose() {
     return "Good Evening";
   }
 
-  // Uses the app's real logo asset (same one used on the native splash
-  // screen). Falls back to a placeholder icon if the asset isn't bundled
-  // yet, so the UI never breaks while the asset is being added.
   Widget _logoMark({double size = 22}) {
     return Image.asset(
       'assets/images/workora_logo.png',
@@ -625,6 +991,10 @@ void dispose() {
                         padding: const EdgeInsets.fromLTRB(20, 14, 20, 16),
                         children: [
                           _buildTabSwitcher(),
+                          if (pendingAutoCheckoutDate != null) ...[
+                            const SizedBox(height: 12),
+                            _autoCheckoutBanner(),
+                          ],
                           const SizedBox(height: 14),
                           _buildHeroCard(),
                           const SizedBox(height: 16),
@@ -642,6 +1012,15 @@ void dispose() {
   }
 
   Widget _buildHeader() {
+    ImageProvider? avatarImage;
+    if (employeePhotoBase64 != null && employeePhotoBase64!.isNotEmpty) {
+      try {
+        avatarImage = MemoryImage(base64Decode(employeePhotoBase64!));
+      } catch (_) {
+        avatarImage = null;
+      }
+    }
+
     return Container(
       decoration: const BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [_kHeroDark1, _kHeroDark2])),
       child: SafeArea(
@@ -662,24 +1041,29 @@ void dispose() {
               Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  Stack(
-                    children: [
-                      Container(
-                        width: 52,
-                        height: 52,
-                        decoration: const BoxDecoration(shape: BoxShape.circle, gradient: AppGradients.punchCard),
-                        child: Center(child: Text(_initials, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 18))),
-                      ),
-                      Positioned(
-                        right: 1,
-                        bottom: 1,
-                        child: Container(
-                          width: 13,
-                          height: 13,
-                          decoration: BoxDecoration(color: AppColors.success, shape: BoxShape.circle, border: Border.all(color: _kHeroDark2, width: 2)),
+                  GestureDetector(
+                    onTap: _openAccountSettings,
+                    child: Stack(
+                      children: [
+                        Container(
+                          width: 52,
+                          height: 52,
+                          decoration: BoxDecoration(shape: BoxShape.circle, gradient: avatarImage == null ? AppGradients.punchCard : null),
+                          child: avatarImage != null
+                              ? ClipOval(child: Image(image: avatarImage, width: 52, height: 52, fit: BoxFit.cover))
+                              : Center(child: Text(_initials, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 18))),
                         ),
-                      ),
-                    ],
+                        Positioned(
+                          right: 1,
+                          bottom: 1,
+                          child: Container(
+                            width: 13,
+                            height: 13,
+                            decoration: BoxDecoration(color: AppColors.success, shape: BoxShape.circle, border: Border.all(color: _kHeroDark2, width: 2)),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                   const SizedBox(width: 14),
                   Expanded(
@@ -734,7 +1118,8 @@ void dispose() {
 
   Widget _buildHeroCard() {
     final checkedIn = status == "Checked In";
-    final done = status == "Checked Out";
+    final done = false;
+    final hasSessions = _todaySessions.isNotEmpty;
     final isWfh = showHomeTab && wfhStatusToday == "approved";
     final canAct = isWfh || (locationStatus == LocationStatus.granted && (currentLocation?.isWithinOfficeRange ?? false));
     final statusLabel = done ? "YOU ARE\nCOMPLETED" : (checkedIn ? "YOU ARE\nCHECKED IN" : "READY TO\nCHECK IN");
@@ -820,7 +1205,7 @@ void dispose() {
             const SizedBox(height: 14),
             _buildBreakStatus(),
           ],
-          if (showHomeTab && wfhStatusToday != "approved" && !done) ...[
+          if (showHomeTab && wfhStatusToday != "approved" && !checkedIn) ...[
             const SizedBox(height: 12),
             TextButton.icon(onPressed: wfhStatusToday == null ? _requestWfh : null, icon: const Icon(Icons.home_work_outlined, color: Colors.white, size: 17), label: Text(wfhStatusToday == "pending" ? "WFH approval pending" : "Request Work From Home", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold))),
           ],
@@ -996,20 +1381,71 @@ void dispose() {
     final items = <_ActivityItem>[];
     final isWfh = showHomeTab && wfhStatusToday == "approved";
 
-    if (punchInTime != "--:--") {
-      items.add(_ActivityItem(time: punchInTime, label: "Checked In", status: isWfh ? "Work From Home" : "Office", icon: Icons.login_rounded, color: AppColors.success, bg: AppColors.successLight));
+    for (int i = 0; i < _todaySessions.length; i++) {
+      final session = _todaySessions[i];
+
+      items.add(
+        _ActivityItem(
+          time: session.punchIn,
+          label: "Checked In",
+          status: isWfh ? "Work From Home" : "Office",
+          icon: Icons.login_rounded,
+          color: AppColors.success,
+          bg: AppColors.successLight,
+        ),
+      );
+
+      if (session.punchOut != null) {
+        items.add(
+          _ActivityItem(
+            time: session.punchOut!,
+            label: "Checked Out",
+            status: "Completed",
+            icon: Icons.logout_rounded,
+            color: AppColors.violet,
+            bg: AppColors.background,
+          ),
+        );
+      } else {
+        items.add(
+          _ActivityItem(
+            time: "--:--",
+            label: "Check Out",
+            status: "Pending",
+            icon: Icons.logout_rounded,
+            color: AppColors.textSecondary,
+            bg: AppColors.background,
+          ),
+        );
+      }
     }
+
     if (lunchBreakStart != null) {
-      items.add(_ActivityItem(time: lunchBreakStart!, label: "Lunch Break", status: lunchBreakEnd != null ? "Completed" : "In Progress", icon: Icons.restaurant_outlined, color: AppColors.warning, bg: AppColors.warningLight));
+      items.add(
+        _ActivityItem(
+          time: lunchBreakStart!,
+          label: "Lunch Break",
+          status: lunchBreakEnd != null ? "Completed" : "In Progress",
+          icon: Icons.restaurant_outlined,
+          color: AppColors.warning,
+          bg: AppColors.warningLight,
+        ),
+      );
     }
+
     if (teaBreakStart != null) {
-      items.add(_ActivityItem(time: teaBreakStart!, label: "Tea Break", status: teaBreakEnd != null ? "Completed" : "In Progress", icon: Icons.coffee_outlined, color: AppColors.warning, bg: AppColors.warningLight));
+      items.add(
+        _ActivityItem(
+          time: teaBreakStart!,
+          label: "Tea Break",
+          status: teaBreakEnd != null ? "Completed" : "In Progress",
+          icon: Icons.coffee_outlined,
+          color: AppColors.warning,
+          bg: AppColors.warningLight,
+        ),
+      );
     }
-    if (punchOutTime != "--:--") {
-      items.add(_ActivityItem(time: punchOutTime, label: "Checked Out", status: "Completed", icon: Icons.logout_rounded, color: AppColors.violet, bg: AppColors.background));
-    } else if (status == "Checked In") {
-      items.add(_ActivityItem(time: "--:--", label: "Check Out", status: "Pending", icon: Icons.logout_rounded, color: AppColors.textSecondary, bg: AppColors.background));
-    }
+
     return items;
   }
 
@@ -1076,26 +1512,64 @@ void dispose() {
 
   Widget _buildAnnouncementCarousel() {
     return StreamBuilder<DatabaseEvent>(
-      stream: dbRef.child('Announcements').limitToLast(1).onValue,
+      stream: dbRef.child('Announcements').onValue,
       builder: (context, snapshot) {
-        Map<String, dynamic>? latest;
+        final announcements = <Map<String, String>>[];
         if (snapshot.hasData && snapshot.data!.snapshot.value != null) {
           final value = snapshot.data!.snapshot.value;
           if (value is Map) {
             final raw = Map<dynamic, dynamic>.from(value);
-            if (raw.isNotEmpty) {
-              final item = Map<dynamic, dynamic>.from(raw.entries.first.value as Map);
-              latest = {
-                "title": item["title"]?.toString() ?? "Announcement",
-                "message": item["message"]?.toString() ?? "",
-                "createdAt": item["createdAt"]?.toString(),
-              };
-            }
+            raw.forEach((_, value) {
+              if (value is Map) {
+                final item = Map<dynamic, dynamic>.from(value);
+                announcements.add({'title': item['title']?.toString() ?? 'Announcement', 'createdAt': item['createdAt']?.toString() ?? ''});
+              }
+            });
+            announcements.sort((a, b) => b['createdAt']!.compareTo(a['createdAt']!));
           }
         }
-
-        return _announcementCard(latest);
+        return _announcementTitleList(announcements);
       },
+    );
+  }
+
+  Widget _autoCheckoutBanner() => Container(
+    padding: const EdgeInsets.all(14),
+    decoration: BoxDecoration(color: AppColors.warning.withOpacity(.14), borderRadius: BorderRadius.circular(14), border: Border.all(color: AppColors.warning.withOpacity(.45))),
+    child: Row(children: [
+      const Icon(Icons.pending_actions, color: AppColors.warning),
+      const SizedBox(width: 10),
+      Expanded(child: Text('Punchout request sent for $pendingAutoCheckoutDate. It is waiting for admin verification and checkout-time approval.', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
+    ]),
+  );
+
+  Widget _announcementTitleList(List<Map<String, String>> announcements) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(gradient: AppGradients.brand, borderRadius: BorderRadius.circular(22), boxShadow: AppShadows.hero),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Row(children: [Icon(Icons.campaign_rounded, color: Colors.white, size: 28), SizedBox(width: 10), Text('Announcements', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800))]),
+        const SizedBox(height: 12),
+        if (announcements.isEmpty)
+          const Text('No announcements yet!', style: TextStyle(color: Colors.white70))
+        else
+          ...announcements.map((item) => Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Material(
+              color: Colors.white.withOpacity(.14),
+              borderRadius: BorderRadius.circular(12),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(12),
+                onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AnnouncementDetailScreen())),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+                  child: Row(children: [const Icon(Icons.article_outlined, color: Colors.white, size: 18), const SizedBox(width: 9), Expanded(child: Text(item['title']!, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700))), const Icon(Icons.chevron_right, color: Colors.white)]),
+                ),
+              ),
+            ),
+          )),
+      ]),
     );
   }
 
@@ -1143,9 +1617,9 @@ void dispose() {
   }
 
   Widget _buildTabSwitcher() {
-    final locked = checkedInAsWfh != null;
-    final homeLocked = locked && checkedInAsWfh == false; // checked in via Office
-    final officeLocked = locked && checkedInAsWfh == true; // checked in via WFH
+    final locked = status == "Checked In";
+    final homeLocked = locked && checkedInAsWfh == false;
+    final officeLocked = locked && checkedInAsWfh == true;
 
     void lockedTap() {
       ScaffoldMessenger.of(context).showSnackBar(

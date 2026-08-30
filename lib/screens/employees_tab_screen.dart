@@ -1,345 +1,317 @@
-import 'package:flutter/material.dart';
+import 'dart:convert';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_database/firebase_database.dart';
+import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import '../utils/app_colors.dart';
-import '../utils/activity_logger.dart';
+import '../utils/attendance_calculator.dart';
+import 'history_screen.dart';
 import 'add_employee_screen.dart';
 import 'profile_screen.dart';
-import 'history_screen.dart';
-import 'admin_attendance_editor_screen.dart';
 
-class EmployeesTabScreen extends StatefulWidget {
+enum _AttendancePeriod { daily, weekly, monthly }
+
+class AdminAttendanceScreen extends StatefulWidget {
   final String adminId;
   final String adminName;
-
-  const EmployeesTabScreen({
-    super.key,
-    required this.adminId,
-    required this.adminName,
-  });
+  const AdminAttendanceScreen({super.key, required this.adminId, required this.adminName});
 
   @override
-  State<EmployeesTabScreen> createState() => _EmployeesTabScreenState();
+  State<AdminAttendanceScreen> createState() => _AdminAttendanceScreenState();
 }
 
-class _EmployeesTabScreenState extends State<EmployeesTabScreen> {
-  late DatabaseReference dbRef;
-  bool showToday = false;
+class _AdminAttendanceScreenState extends State<AdminAttendanceScreen> with SingleTickerProviderStateMixin {
+  late final DatabaseReference _db;
+  late final TabController _tabs;
+  late Future<Map<dynamic, dynamic>> _usersFuture;
+  late Future<_AdminAttendanceData> _attendanceFuture;
+  _AttendancePeriod _period = _AttendancePeriod.daily;
+  DateTime _reference = DateTime.now();
 
   @override
   void initState() {
     super.initState();
-    dbRef = FirebaseDatabase.instanceFor(
-      app: Firebase.app(),
-      databaseURL:
-          "https://edubotics-attendance-default-rtdb.asia-southeast1.firebasedatabase.app",
-    ).ref();
+    _db = FirebaseDatabase.instanceFor(app: Firebase.app(), databaseURL: 'https://edubotics-attendance-default-rtdb.asia-southeast1.firebasedatabase.app').ref();
+    _tabs = TabController(length: 3, vsync: this);
+    _usersFuture = _loadUsers();
+    _attendanceFuture = _loadAttendanceData();
   }
 
-  String _todayKey() {
-    final now = DateTime.now();
-    return "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
+  @override
+  void dispose() { _tabs.dispose(); super.dispose(); }
+
+  String _dateKey(DateTime date) => DateFormat('yyyy-MM-dd').format(date);
+  List<String> get _periodKeys {
+    final day = DateTime(_reference.year, _reference.month, _reference.day);
+    if (_period == _AttendancePeriod.daily) return [_dateKey(day)];
+    if (_period == _AttendancePeriod.weekly) return List.generate(7, (i) => _dateKey(day.subtract(Duration(days: i))));
+    return List.generate(day.day, (i) => _dateKey(DateTime(day.year, day.month, i + 1)));
   }
 
-  String _normalizedRole(dynamic rawRole) {
-    final role = rawRole?.toString().toLowerCase();
-    if (role == "superadmin") return "Super Admin";
-    return "Employee";
+  /// Singular/plural text helper, e.g. _pluralize(1, 'full day', 'full days')
+  /// => "1 full day", _pluralize(3, 'full day', 'full days') => "3 full days".
+  String _pluralize(int count, String singular, String plural) => '$count ${count == 1 ? singular : plural}';
+
+  Map<dynamic, dynamic> _map(dynamic value) => value is Map ? Map<dynamic, dynamic>.from(value) : <dynamic, dynamic>{};
+  Future<Map<dynamic, dynamic>> _loadUsers() async => _map((await _db.child('users').get()).value);
+  Future<_AdminAttendanceData> _loadAttendanceData() async {
+    final results = await Future.wait([_db.child('users').get(), _db.child('Attendance').get(), _db.child('AttendanceSummary').get()]);
+    return _AdminAttendanceData(
+      users: _map(results[0].value),
+      attendance: _map(results[1].value),
+      summaries: _map(results[2].value),
+    );
+  }
+  Future<void> _refresh() async {
+    setState(() {
+      _usersFuture = _loadUsers();
+      _attendanceFuture = _loadAttendanceData();
+    });
+    await _usersFuture;
+  }
+  bool _isEmployee(Map<dynamic, dynamic> user) => user['role']?.toString().toLowerCase() != 'superadmin';
+
+  /// Classification always runs through AttendanceCalculator using the real
+  /// punch-in and punch-out times — including admin-verified auto
+  /// checkouts. There is no forced full-day override: a verified day is a
+  /// full day only if it actually reaches 9 gross hours, otherwise it's a
+  /// mis-punch like any other day.
+  AttendanceResult? _result(Map<dynamic, dynamic> record) {
+    if (record['punchIn'] == null || record['punchOut'] == null) return null;
+    return AttendanceCalculator.calculate(punchIn: record['punchIn'].toString(), punchOut: record['punchOut'].toString(), workFromHome: record['workFromHome'] == true);
   }
 
-  Future<void> _confirmDelete(String id, String name) async {
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(
+      title: const Text('Attendance'),
+      actions: [
+        IconButton(onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AddEmployeeScreen())).then((_) => _refresh()), icon: const Icon(Icons.person_add_alt_1), tooltip: 'Add employee'),
+        IconButton(onPressed: _refresh, icon: const Icon(Icons.refresh), tooltip: 'Refresh'),
+      ],
+      bottom: TabBar(controller: _tabs, isScrollable: false, indicatorColor: Colors.white, labelColor: Colors.white, unselectedLabelColor: Colors.white70, tabs: const [Tab(text: 'Employees'), Tab(text: 'All Attendance'), Tab(text: 'Compensation')]),
+    ),
+    body: TabBarView(controller: _tabs, children: [_employeeFutureTab(), _allFutureTab(), _compensationFutureTab()]),
+  );
+
+  Widget _employeeFutureTab() => FutureBuilder<Map<dynamic, dynamic>>(
+    future: _usersFuture,
+    builder: (_, snapshot) {
+      if (snapshot.connectionState != ConnectionState.done) return const Center(child: CircularProgressIndicator());
+      if (snapshot.hasError) return _loadError(snapshot.error);
+      return RefreshIndicator(onRefresh: _refresh, child: _employees(snapshot.data ?? {}));
+    },
+  );
+  Widget _allFutureTab() => FutureBuilder<_AdminAttendanceData>(
+    future: _attendanceFuture,
+    builder: (_, snapshot) {
+      if (snapshot.connectionState != ConnectionState.done) return const Center(child: CircularProgressIndicator());
+      if (snapshot.hasError) return _loadError(snapshot.error);
+      final data = snapshot.data!; return RefreshIndicator(onRefresh: _refresh, child: _allAttendance(data.users, data.attendance));
+    },
+  );
+  Widget _compensationFutureTab() => FutureBuilder<_AdminAttendanceData>(
+    future: _attendanceFuture,
+    builder: (_, snapshot) {
+      if (snapshot.connectionState != ConnectionState.done) return const Center(child: CircularProgressIndicator());
+      if (snapshot.hasError) return _loadError(snapshot.error);
+      final data = snapshot.data!; return RefreshIndicator(onRefresh: _refresh, child: _compensation(data.users, data.attendance, data.summaries));
+    },
+  );
+  Widget _loadError(Object? error) => Center(child: Padding(padding: const EdgeInsets.all(24), child: Column(mainAxisSize: MainAxisSize.min, children: [const Icon(Icons.cloud_off, size: 34), const SizedBox(height: 12), const Text('Could not load data.'), const SizedBox(height: 8), Text('$error', textAlign: TextAlign.center, style: const TextStyle(fontSize: 11)), TextButton(onPressed: _refresh, child: const Text('Try again'))])));
+
+  List<MapEntry<dynamic, dynamic>> _employeeEntries(Map<dynamic, dynamic> users) {
+    final entries = users.entries.where((entry) => _isEmployee(_map(entry.value))).toList();
+    entries.sort((a, b) => (_map(a.value)['name'] ?? a.key).toString().compareTo((_map(b.value)['name'] ?? b.key).toString()));
+    return entries;
+  }
+
+  Widget _employees(Map<dynamic, dynamic> users) {
+    final entries = _employeeEntries(users);
+    if (entries.isEmpty) return const Center(child: Text('No employees found.'));
+    return ListView.builder(padding: const EdgeInsets.all(16), itemCount: entries.length, itemBuilder: (_, index) {
+      final entry = entries[index];
+      final data = _map(entry.value);
+      final id = entry.key.toString();
+      final name = data['name']?.toString() ?? id;
+      final photoBase64 = data['photoBase64']?.toString();
+      final subtitleInfo = data['designation'] ?? data['department'] ?? 'Employee';
+
+      ImageProvider? avatarImg;
+      if (photoBase64 != null && photoBase64.isNotEmpty) {
+        try {
+          avatarImg = MemoryImage(base64Decode(photoBase64));
+        } catch (_) {}
+      }
+
+      return Card(
+        margin: const EdgeInsets.only(bottom: 10),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        child: ListTile(
+          leading: CircleAvatar(
+            backgroundColor: AppColors.primary.withOpacity(0.12),
+            backgroundImage: avatarImg,
+            child: avatarImg == null ? const Icon(Icons.person, color: AppColors.primary) : null,
+          ),
+          title: Text(name, style: const TextStyle(fontWeight: FontWeight.bold)),
+          subtitle: Text("$id • $subtitleInfo", style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+          trailing: PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert),
+            onSelected: (value) {
+              if (value == 'profile') {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => ProfileScreen(
+                      employeeId: id,
+                      viewerIsAdmin: true,
+                      viewerAdminId: widget.adminId,
+                      viewerAdminName: widget.adminName,
+                    ),
+                  ),
+                ).then((_) => _refresh());
+              } else if (value == 'view') {
+                Navigator.push(context, MaterialPageRoute(builder: (_) => HistoryScreen(
+                  employeeId: id,
+                  employeeName: name,
+                  viewerIsAdmin: true,
+                  viewerAdminId: widget.adminId,
+                  viewerAdminName: widget.adminName,
+                )));
+              } else if (value == 'delete') {
+                _confirmDeleteEmployee(id, name);
+              }
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem(
+                value: 'profile',
+                child: Row(children: [Icon(Icons.person_outline, size: 18), SizedBox(width: 8), Text('View profile')]),
+              ),
+              PopupMenuItem(
+                value: 'view',
+                child: Row(children: [Icon(Icons.visibility_outlined, size: 18), SizedBox(width: 8), Text('View attendance')]),
+              ),
+              PopupMenuItem(
+                value: 'delete',
+                child: Row(children: [Icon(Icons.delete_outline, size: 18, color: Colors.red), SizedBox(width: 8), Text('Delete employee', style: TextStyle(color: Colors.red))]),
+              ),
+            ],
+          ),
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => ProfileScreen(
+                employeeId: id,
+                viewerIsAdmin: true,
+                viewerAdminId: widget.adminId,
+                viewerAdminName: widget.adminName,
+              ),
+            ),
+          ).then((_) => _refresh()),
+        ),
+      );
+    });
+  }
+
+  Future<void> _confirmDeleteEmployee(String employeeId, String name) async {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
-        title: const Text("Delete Employee"),
-        content: Text("Remove $name ($id)? Attendance history will be kept."),
+        title: const Text('Delete employee?'),
+        content: Text('Remove $name ($employeeId) from the employee list? Their attendance history will remain available for audit.'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text("Cancel")),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: TextButton.styleFrom(foregroundColor: AppColors.danger),
-            child: const Text("Delete"),
-          ),
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(context, true), style: TextButton.styleFrom(foregroundColor: Colors.red), child: const Text('Delete')),
         ],
       ),
     );
     if (confirm != true) return;
-
-    try {
-      await dbRef.child("users").child(id).remove();
-
-      await ActivityLogger.log(
-        adminId: widget.adminId,
-        adminName: widget.adminName,
-        action: "Deleted Employee",
-        details: "$name ($id)",
-      );
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("$name removed")));
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error : $e")));
-    }
+    await _db.child('users').child(employeeId).remove();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$name was removed. Attendance history was kept.')));
+    await _refresh();
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(gradient: AppGradients.background),
-        child: SafeArea(
-          child: Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text(
-                      "Employees",
-                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
-                    ),
-                    Container(
-                      padding: const EdgeInsets.all(4),
-                      decoration: BoxDecoration(
-                        color: AppColors.surface,
-                        borderRadius: BorderRadius.circular(24),
-                        boxShadow: AppShadows.card,
-                      ),
-                      child: Row(
-                        children: [
-                          _toggleChip("List", !showToday, () => setState(() => showToday = false)),
-                          _toggleChip("Today", showToday, () => setState(() => showToday = true)),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Expanded(child: showToday ? _buildTodayOverview() : _buildEmployeeList()),
-            ],
-          ),
-        ),
-      ),
-      floatingActionButton: showToday
-          ? null
-          : FloatingActionButton.extended(
-              backgroundColor: AppColors.primary,
-              icon: const Icon(Icons.person_add, color: Colors.white),
-              label: const Text("Add", style: TextStyle(color: Colors.white)),
-              onPressed: () => Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const AddEmployeeScreen()),
-              ),
+  Widget _allAttendance(Map<dynamic, dynamic> users, Map<dynamic, dynamic> attendance) {
+    final keys = _periodKeys;
+    final cards = <Widget>[];
+    for (final entry in _employeeEntries(users)) {
+      final id = entry.key.toString(); final user = _map(entry.value); final records = _map(attendance[id]);
+      var full = 0, mis = 0, pending = 0, worked = 0;
+      for (final key in keys) {
+        final record = _map(records[key]);
+        if (record['status'] == 'Auto Checkout Pending') { pending++; continue; }
+        final result = _result(record); if (result == null) continue;
+        worked += (result.netHours * 60).round();
+        if (result.dayType == DayType.fullDay) full++;
+        if (result.dayType == DayType.misPunch) mis++;
+      }
+      final subtitle = '${_pluralize(full, 'full day', 'full days')} • '
+          '${_pluralize(mis, 'mis-punch', 'mis-punches')}'
+          '${pending > 0 ? ' • ${_pluralize(pending, 'auto checkout pending', 'auto checkouts pending')}' : ''} • '
+          '${AttendanceCalculator.formatHours(worked / 60)}';
+      cards.add(
+        Card(
+          child: ListTile(
+            title: Text(user['name']?.toString() ?? id),
+            subtitle: Text(subtitle),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => HistoryScreen(
+                employeeId: id,
+                employeeName: user['name']?.toString() ?? id,
+                viewerIsAdmin: true,
+                viewerAdminId: widget.adminId,
+                viewerAdminName: widget.adminName,
+              )),
             ),
-    );
-  }
-
-  Widget _toggleChip(String label, bool selected, VoidCallback onTap) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        decoration: BoxDecoration(
-          color: selected ? AppColors.primary : Colors.transparent,
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            color: selected ? Colors.white : AppColors.textSecondary,
-            fontWeight: FontWeight.bold,
-            fontSize: 12,
           ),
         ),
-      ),
-    );
+      );
+    }
+    return Column(children: [_periodControls(), Expanded(child: ListView(padding: const EdgeInsets.all(12), children: cards))]);
   }
 
-  Widget _buildEmployeeList() {
-    return StreamBuilder<DatabaseEvent>(
-      stream: dbRef.child("users").onValue,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        if (!snapshot.hasData || snapshot.data!.snapshot.value == null) {
-          return const Center(child: Text("No Employees Found"));
-        }
+  Widget _periodControls() => Padding(padding: const EdgeInsets.all(12), child: Row(children: [
+    Expanded(child: SegmentedButton<_AttendancePeriod>(segments: const [ButtonSegment(value: _AttendancePeriod.daily, label: Text('Daily')), ButtonSegment(value: _AttendancePeriod.weekly, label: Text('Weekly')), ButtonSegment(value: _AttendancePeriod.monthly, label: Text('Monthly'))], selected: {_period}, onSelectionChanged: (value) => setState(() => _period = value.first))),
+    IconButton(icon: const Icon(Icons.calendar_today_outlined), tooltip: 'Choose date', onPressed: () async { final date = await showDatePicker(context: context, initialDate: _reference, firstDate: DateTime(2020), lastDate: DateTime.now()); if (date != null) setState(() => _reference = date); }),
+  ]));
 
-        final data = Map<dynamic, dynamic>.from(snapshot.data!.snapshot.value as Map);
-        final ids = data.keys.toList();
-
-        return ListView.builder(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 90),
-          itemCount: ids.length,
-          itemBuilder: (context, index) {
-            final id = ids[index];
-            final employee = Map<dynamic, dynamic>.from(data[id]);
-            if (employee["role"]?.toString().toLowerCase() == "superadmin") {
-  return const SizedBox.shrink();
-}
-            final name = employee["name"]?.toString() ?? "No Name";
-            final hasAdminAccess = employee["adminAccess"] == true;
-
-            return Container(
-              margin: const EdgeInsets.only(bottom: 10),
-              decoration: BoxDecoration(
-                color: AppColors.surface,
-                borderRadius: BorderRadius.circular(14),
-                boxShadow: AppShadows.card,
-              ),
-              child: ListTile(
-                leading: CircleAvatar(
-                  backgroundColor: AppColors.primary,
-                  child: Icon(
-                    hasAdminAccess ? Icons.admin_panel_settings : Icons.person,
-                    color: Colors.white,
-                  ),
-                ),
-                title: Text(name, style: const TextStyle(fontWeight: FontWeight.bold)),
-                subtitle: Text(
-                  "$id \u00b7 ${_normalizedRole(employee["role"])}"
-                  "${hasAdminAccess ? ' \u00b7 Admin Access' : ''}",
-                ),
-                trailing: PopupMenuButton<String>(
-                  icon: const Icon(Icons.more_vert),
-                  onSelected: (value) {
-                    if (value == "profile") {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => ProfileScreen(employeeId: id, viewOnly: true),
-                        ),
-                      );
-                    } else if (value == "history") {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => HistoryScreen(employeeId: id, employeeName: name),
-                        ),
-                      );
-                    } else if (value == "attendance") {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (_) => AdminAttendanceEditorScreen(adminId: widget.adminId, adminName: widget.adminName, employeeId: id, employeeName: name)),
-                      );
-                    } else if (value == "delete") {
-                      _confirmDelete(id, name);
-                    }
-                  },
-                  itemBuilder: (context) => const [
-                    PopupMenuItem(
-                      value: "profile",
-                      child: Row(children: [Icon(Icons.person, size: 18), SizedBox(width: 8), Text("View Profile")]),
-                    ),
-                    PopupMenuItem(
-                      value: "history",
-                      child: Row(children: [Icon(Icons.history, size: 18), SizedBox(width: 8), Text("History")]),
-                    ),
-                    PopupMenuItem(
-                      value: "attendance",
-                      child: Row(children: [Icon(Icons.edit_calendar, size: 18), SizedBox(width: 8), Text("Edit Attendance")]),
-                    ),
-                    PopupMenuItem(
-                      value: "delete",
-                      child: Row(children: [
-                        Icon(Icons.delete, size: 18, color: AppColors.danger),
-                        SizedBox(width: 8),
-                        Text("Delete", style: TextStyle(color: AppColors.danger)),
-                      ]),
-                    ),
-                  ],
-                ),
-              ),
-            );
-          },
-        );
-      },
-    );
+  Widget _compensation(Map<dynamic, dynamic> users, Map<dynamic, dynamic> attendance, Map<dynamic, dynamic> summaries) {
+    final cards = <Widget>[];
+    for (final entry in _employeeEntries(users)) {
+      final id = entry.key.toString(); final name = _map(entry.value)['name']?.toString() ?? id;
+      final records = _map(attendance[id]); final activity = <String>[];
+      final dates = records.keys.map((key) => key.toString()).toList()..sort((a, b) => b.compareTo(a));
+      for (final date in dates) {
+        final result = _result(_map(records[date]));
+        if (result?.dayType == DayType.misPunch) activity.add('$date • owes ${AttendanceCalculator.formatHours(result!.shortfallHours)}');
+        if ((result?.extraHours ?? 0) > 0) activity.add('$date • earned ${AttendanceCalculator.formatHours(result!.extraHours)} extra');
+      }
+      final outstanding = _outstandingMinutes(records);
+      if (activity.isNotEmpty || outstanding > 0) cards.add(Card(child: ExpansionTile(title: Text(name), subtitle: Text('Outstanding: ${AttendanceCalculator.formatHours(outstanding / 60)}'), children: activity.isEmpty ? const [ListTile(title: Text('No compensation activity yet.'))] : activity.map((text) => ListTile(leading: const Icon(Icons.schedule), title: Text(text))).toList())));
+    }
+    return cards.isEmpty ? const Center(child: Text('No mis-punch or compensation records.')) : ListView(padding: const EdgeInsets.all(12), children: cards);
   }
 
-  Widget _buildTodayOverview() {
-    return StreamBuilder<DatabaseEvent>(
-      stream: dbRef.child("users").onValue,
-      builder: (context, snapshot) {
-        if (!snapshot.hasData || snapshot.data!.snapshot.value == null) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        final users = Map<dynamic, dynamic>.from(snapshot.data!.snapshot.value as Map);
-        final ids = users.keys.toList();
-
-        return ListView.builder(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-          itemCount: ids.length,
-          itemBuilder: (context, index) {
-            final id = ids[index];
-            final user = Map<dynamic, dynamic>.from(users[id]);
-            if (user["role"]?.toString().toLowerCase() == "superadmin") {
-  return const SizedBox.shrink();
+  int _outstandingMinutes(Map<dynamic, dynamic> records) {
+    final dates = records.keys.map((key) => key.toString()).toList()..sort();
+    var balance = 0;
+    for (final date in dates) {
+      final record = _map(records[date]);
+      if (record['punchIn'] == null || record['punchOut'] == null || record['autoPunchOut'] == true || record['workFromHome'] == true) continue;
+      final result = AttendanceCalculator.calculate(punchIn: record['punchIn'].toString(), punchOut: record['punchOut'].toString());
+      balance += (result.shortfallHours * 60).round() - (result.extraHours * 60).round();
+      if (balance < 0) balance = 0;
+    }
+    return balance;
+  }
 }
 
-            return StreamBuilder<DatabaseEvent>(
-              stream: dbRef.child("Attendance").child(id).child(_todayKey()).onValue,
-              builder: (context, attendanceSnapshot) {
-                String status = "Not Checked In";
-                String inTime = "--", outTime = "--";
-
-                if (attendanceSnapshot.hasData && attendanceSnapshot.data!.snapshot.value != null) {
-                  final att = Map<dynamic, dynamic>.from(attendanceSnapshot.data!.snapshot.value as Map);
-                  status = att["status"] ?? "Not Checked In";
-                  inTime = att["punchIn"] ?? "--";
-                  outTime = att["punchOut"] ?? "--";
-                }
-
-                return Container(
-                  margin: const EdgeInsets.only(bottom: 10),
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: AppColors.surface,
-                    borderRadius: BorderRadius.circular(14),
-                    boxShadow: AppShadows.card,
-                  ),
-                  child: Row(
-                    children: [
-                      const CircleAvatar(
-                        backgroundColor: AppColors.primary,
-                        child: Icon(Icons.person, color: Colors.white),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text("${user["name"]}", style: const TextStyle(fontWeight: FontWeight.bold)),
-                            Text("In: $inTime  Out: $outTime", style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
-                          ],
-                        ),
-                      ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: (status == "Checked Out" ? AppColors.success : AppColors.warning).withOpacity(0.12),
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Text(
-                          status,
-                          style: TextStyle(
-                            color: status == "Checked Out" ? AppColors.success : AppColors.warning,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 10,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              },
-            );
-          },
-        );
-      },
-    );
-  }
+class _AdminAttendanceData {
+  final Map<dynamic, dynamic> users;
+  final Map<dynamic, dynamic> attendance;
+  final Map<dynamic, dynamic> summaries;
+  const _AdminAttendanceData({required this.users, required this.attendance, required this.summaries});
 }

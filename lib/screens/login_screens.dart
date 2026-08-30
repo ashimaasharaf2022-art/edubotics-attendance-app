@@ -142,14 +142,14 @@ class _LoginScreenState extends State<LoginScreen> {
       if (!mounted) return;
       setState(() => isLoggingIn = false);
 
-      if (role == "superadmin") {
+      if (role == "superadmin" || role == "admin") {
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
             builder: (_) => AdminShell(
               employeeId: empId,
               employeeName: name,
-              isSuperAdmin: true,
+              isSuperAdmin: role == "superadmin",
             ),
           ),
         );

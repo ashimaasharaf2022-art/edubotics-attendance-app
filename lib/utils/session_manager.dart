@@ -36,6 +36,20 @@ class SessionManager {
     };
   }
 
+  /// Convenience accessor for just the logged-in employee ID, or null if
+  /// no one is logged in.
+  static Future<String?> getEmployeeId() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_keyEmployeeId);
+  }
+
+  /// Convenience accessor for just the logged-in user's role, or null if
+  /// no one is logged in.
+  static Future<String?> getRole() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_keyRole);
+  }
+
   static Future<void> clearSession() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_keyEmployeeId);
