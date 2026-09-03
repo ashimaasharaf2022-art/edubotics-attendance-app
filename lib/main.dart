@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 
@@ -19,11 +20,15 @@ Future<void> main() async {
     debugPrint("INIT ERROR: $e");
   }
 
-  try {
-    await NotificationHelper.init();
-    await NotificationHelper.scheduleWorkdayReminders();
-  } catch (e) {
-    debugPrint("NOTIFICATION INIT ERROR: $e");
+  // flutter_local_notifications has no web support at all — skip it
+  // entirely on web rather than letting it fail and get caught below.
+  if (!kIsWeb) {
+    try {
+      await NotificationHelper.init();
+      await NotificationHelper.scheduleWorkdayReminders();
+    } catch (e) {
+      debugPrint("NOTIFICATION INIT ERROR: $e");
+    }
   }
 
   runApp(const AttendanceApp());

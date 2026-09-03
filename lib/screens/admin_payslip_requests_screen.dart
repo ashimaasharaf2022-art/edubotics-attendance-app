@@ -65,7 +65,7 @@ class _AdminPayslipRequestsScreenState extends State<AdminPayslipRequestsScreen>
             final requests = Map<dynamic, dynamic>.from(requestsMap as Map);
             requests.forEach((key, value) {
               final req = Map<dynamic, dynamic>.from(value as Map);
-              items.add({...req, "employeeId": empId.toString(), "key": key.toString()});
+              items.add({...Map<String, dynamic>.from(req), "employeeId": empId.toString(), "key": key.toString()});
             });
           });
           items.sort((a, b) => (b["requestedAt"] ?? "").toString().compareTo((a["requestedAt"] ?? "").toString()));

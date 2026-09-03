@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -143,71 +144,77 @@ class _LoginScreenState extends State<LoginScreen> {
           ? null
           : nameValue;
 
-      final registeredDeviceValue =
-          user["registeredDeviceId"]?.toString().trim();
+      // Device fingerprint checks only apply to native mobile builds.
+      // On web there's no reliable hardware device ID (browsers can be
+      // cleared, switched, or used from any machine), so we skip the
+      // "one device per employee" enforcement entirely for web logins.
+      if (!kIsWeb) {
+        final registeredDeviceValue =
+            user["registeredDeviceId"]?.toString().trim();
 
-      final registeredDeviceId =
-          (registeredDeviceValue == null ||
-                  registeredDeviceValue.isEmpty)
-              ? null
-              : registeredDeviceValue;
+        final registeredDeviceId =
+            (registeredDeviceValue == null ||
+                    registeredDeviceValue.isEmpty)
+                ? null
+                : registeredDeviceValue;
 
-      final currentDeviceId = await DeviceHelper.getDeviceId();
+        final currentDeviceId = await DeviceHelper.getDeviceId();
 
-      // Super Admin/Admin can log in normally on their first device.
-      // Other employees also get their first device registered here.
-      if (registeredDeviceId == null) {
-        await dbRef.child("users").child(empId).update({
-          "registeredDeviceId": currentDeviceId,
-        });
-      } else if (registeredDeviceId != currentDeviceId) {
-        if (!mounted) return;
+        // Super Admin/Admin can log in normally on their first device.
+        // Other employees also get their first device registered here.
+        if (registeredDeviceId == null) {
+          await dbRef.child("users").child(empId).update({
+            "registeredDeviceId": currentDeviceId,
+          });
+        } else if (registeredDeviceId != currentDeviceId) {
+          if (!mounted) return;
 
-        setState(() => isLoggingIn = false);
+          setState(() => isLoggingIn = false);
 
-        final deviceModel = await DeviceHelper.getDeviceModel();
+          final deviceModel = await DeviceHelper.getDeviceModel();
 
-        final requestRef =
-            dbRef.child("DeviceApprovalRequests").child(empId).push();
+          final requestRef =
+              dbRef.child("DeviceApprovalRequests").child(empId).push();
 
-        await requestRef.set({
-          "employeeId": empId,
-          "employeeName": name ?? empId,
-          "deviceId": currentDeviceId,
-          "deviceModel": deviceModel,
-          "status": "pending",
-          "requestedAt": DateTime.now().toIso8601String(),
-        });
+          await requestRef.set({
+            "employeeId": empId,
+            "employeeName": name ?? empId,
+            "deviceId": currentDeviceId,
+            "deviceModel": deviceModel,
+            "status": "pending",
+            "requestedAt": DateTime.now().toIso8601String(),
+          });
 
-        await NotificationCenter.sendAdmin(
-          title: "New Device Login Request",
-          message:
-              "${name ?? empId} is trying to log in from a new device: $deviceModel.",
-        );
+          await NotificationCenter.sendAdmin(
+            title: "New Device Login Request",
+            message:
+                "${name ?? empId} is trying to log in from a new device: $deviceModel.",
+          );
 
-        await EmailAlertHelper.sendAlert(
-          templateId: EmailAlertHelper.templateDeviceLogin,
-          subject: "New Device Login Request — ${name ?? empId}",
-          message:
-              "${name ?? empId} ($empId) is trying to log in from a new device: $deviceModel.\n\n"
-              "Open the app to generate an OTP for them.",
-        );
+          await EmailAlertHelper.sendAlert(
+            templateId: EmailAlertHelper.templateDeviceLogin,
+            subject: "New Device Login Request — ${name ?? empId}",
+            message:
+                "${name ?? empId} ($empId) is trying to log in from a new device: $deviceModel.\n\n"
+                "Open the app to generate an OTP for them.",
+          );
 
-        if (!mounted) return;
+          if (!mounted) return;
 
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => DeviceApprovalScreen(
-              employeeId: empId,
-              requestId: requestRef.key!,
-              role: role,
-              employeeName: name,
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => DeviceApprovalScreen(
+                employeeId: empId,
+                requestId: requestRef.key!,
+                role: role,
+                employeeName: name,
+              ),
             ),
-          ),
-        );
+          );
 
-        return;
+          return;
+        }
       }
 
       await SessionManager.saveSession(

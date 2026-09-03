@@ -1,11 +1,13 @@
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:excel/excel.dart' as ex;
 
 import '../utils/attendance_calculator.dart';
+import 'web_download/web_download.dart';
 
 class ExportRow {
   final String employeeId;
@@ -66,6 +68,20 @@ class ExportHelper {
     required String fileName,
     required List<int> bytes,
   }) async {
+    if (kIsWeb) {
+      final mimeType = method == "savePdfToDownloads"
+          ? "application/pdf"
+          : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+      await downloadBytesWeb(
+        Uint8List.fromList(bytes),
+        fileName,
+        mimeType: mimeType,
+      );
+
+      return "Downloaded $fileName";
+    }
+
     final result = await _downloadChannel.invokeMethod<String>(
       method,
       {

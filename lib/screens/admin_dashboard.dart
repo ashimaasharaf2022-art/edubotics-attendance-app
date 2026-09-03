@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -350,11 +349,11 @@ class _AdminDashboardState extends State<AdminDashboard> {
                     ),
                     child: Row(
                       children: [
-                        if (attachment!.isImage && attachment!.localPath != null)
+                        if (attachment!.isImage && attachment!.previewBytes != null)
                           ClipRRect(
                             borderRadius: BorderRadius.circular(8),
-                            child: Image.file(
-                              File(attachment!.localPath!),
+                            child: Image.memory(
+                              attachment!.previewBytes!,
                               width: 48,
                               height: 48,
                               fit: BoxFit.cover,

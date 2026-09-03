@@ -1,5 +1,5 @@
 import 'dart:convert';
-import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -92,7 +92,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   String _bloodGroup = 'O+';
   String _status = 'active';
 
-  File? pickedPhotoFile;
+  Uint8List? pickedPhotoBytes;
 
   final List<String> _employmentTypes = <String>[
     'Full-Time',
@@ -379,8 +379,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
     if (picked == null || !mounted) return;
 
+    // XFile.readAsBytes() works identically on mobile and web, unlike
+    // dart:io.File which only works on mobile (picked.path is a blob:
+    // URL on web, not a real filesystem path).
+    final bytes = await picked.readAsBytes();
+
+    if (!mounted) return;
+
     setState(() {
-      pickedPhotoFile = File(picked.path);
+      pickedPhotoBytes = bytes;
     });
   }
 
@@ -458,9 +465,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
             _emergencyContactController.text.trim();
         updates['bloodGroup'] = _bloodGroup;
 
-        if (pickedPhotoFile != null) {
-          final bytes = await pickedPhotoFile!.readAsBytes();
-          updates['photoBase64'] = base64Encode(bytes);
+        if (pickedPhotoBytes != null) {
+          updates['photoBase64'] = base64Encode(pickedPhotoBytes!);
         }
       }
 
@@ -529,7 +535,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             profile = newProfile;
             _currentEmployeeId = _employeeIdController.text.trim();
             editing = false;
-            pickedPhotoFile = null;
+            pickedPhotoBytes = null;
             saving = false;
           });
         }
@@ -541,7 +547,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           _currentEmployeeId =
               _canEditCompanyDetails ? newEmployeeId : oldEmployeeId;
           editing = false;
-          pickedPhotoFile = null;
+          pickedPhotoBytes = null;
           saving = false;
         });
       }
@@ -883,8 +889,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   ImageProvider<Object>? _getAvatarImage() {
-    if (pickedPhotoFile != null) {
-      return FileImage(pickedPhotoFile!);
+    if (pickedPhotoBytes != null) {
+      return MemoryImage(pickedPhotoBytes!);
     }
 
     final photoBase64 =

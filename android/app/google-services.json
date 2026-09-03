@@ -1,6 +1,7 @@
 {
   "project_info": {
     "project_number": "410201815396",
+    "firebase_url": "https://edubotics-attendance-default-rtdb.asia-southeast1.firebasedatabase.app",
     "project_id": "edubotics-attendance",
     "storage_bucket": "edubotics-attendance.firebasestorage.app"
   },

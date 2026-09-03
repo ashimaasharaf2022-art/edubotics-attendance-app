@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_database/firebase_database.dart';
@@ -11,6 +11,7 @@ import 'package:flutter/services.dart';
 import '../utils/app_colors.dart';
 import '../utils/attendance_calculator.dart';
 import '../utils/auto_checkout_fallback.dart';
+import '../utils/web_download/web_download.dart';
 import 'compensation_activity_screen.dart';
 import 'admin_attendance_editor_screen.dart';
 
@@ -444,6 +445,27 @@ class _HistoryScreenState extends State<HistoryScreen> {
     );
 
     final bytes = await doc.save();
+
+    if (kIsWeb) {
+      try {
+        await downloadBytesWeb(
+          Uint8List.fromList(bytes),
+          'attendance_${widget.employeeId}_${selectedMonth.year}_${selectedMonth.month.toString().padLeft(2, '0')}.pdf',
+          mimeType: 'application/pdf',
+        );
+
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Attendance report downloaded.')),
+        );
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not download the report: $e')),
+        );
+      }
+      return;
+    }
 
     try {
       final result = await _downloadChannel.invokeMethod<String>(
