@@ -9,7 +9,7 @@ import 'admin_approvals_screen.dart';
 import 'admin_payslip_requests_screen.dart';
 import 'admin_leave_screen.dart';
 import 'announcement_detail_screen.dart';
-import 'profile_screen.dart';
+import 'account_settings_screen.dart';
 import '../utils/attachment_upload.dart';
 
 // Dark palette used only for this screen's hero header, matching the
@@ -531,16 +531,16 @@ class _AdminDashboardState extends State<AdminDashboard> {
               ),
               const SizedBox(height: 18),
               GestureDetector(
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => ProfileScreen(
-                      employeeId: widget.employeeId,
-                      isAdmin: true,
-                      isSuperAdmin: widget.isSuperAdmin,
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => AccountSettingsScreen(
+                        employeeId: widget.employeeId,
+                      ),
                     ),
-                  ),
-                ),
+                  );
+                },
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [

@@ -158,11 +158,33 @@ class _AdminAttendanceScreenState extends State<AdminAttendanceScreen> with Sing
           trailing: PopupMenuButton<String>(
             icon: const Icon(Icons.more_vert),
             onSelected: (value) {
-              if (value == 'delete') {
+              if (value == 'profile') {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => ProfileScreen(
+                      employeeId: id,
+                      viewerIsAdmin: true,
+                      viewerAdminId: widget.adminId,
+                      viewerAdminName: widget.adminName,
+                    ),
+                  ),
+                ).then((_) => _refresh());
+              } else if (value == 'view') {
+                Navigator.push(context, MaterialPageRoute(builder: (_) => HistoryScreen(employeeId: id, employeeName: name, viewerIsAdmin: true, viewerAdminId: widget.adminId, viewerAdminName: widget.adminName)));
+              } else if (value == 'delete') {
                 _confirmDeleteEmployee(id, name);
               }
             },
             itemBuilder: (_) => const [
+              PopupMenuItem(
+                value: 'profile',
+                child: Row(children: [Icon(Icons.person_outline, size: 18), SizedBox(width: 8), Text('View profile')]),
+              ),
+              PopupMenuItem(
+                value: 'view',
+                child: Row(children: [Icon(Icons.visibility_outlined, size: 18), SizedBox(width: 8), Text('View attendance')]),
+              ),
               PopupMenuItem(
                 value: 'delete',
                 child: Row(children: [Icon(Icons.delete_outline, size: 18, color: Colors.red), SizedBox(width: 8), Text('Delete employee', style: TextStyle(color: Colors.red))]),
@@ -230,7 +252,7 @@ class _AdminAttendanceScreenState extends State<AdminAttendanceScreen> with Sing
             trailing: const Icon(Icons.chevron_right),
             onTap: () => Navigator.push(
               context,
-              MaterialPageRoute(builder: (_) => HistoryScreen(employeeId: id, employeeName: user['name']?.toString() ?? id)),
+              MaterialPageRoute(builder: (_) => HistoryScreen(employeeId: id, employeeName: user['name']?.toString() ?? id, viewerIsAdmin: true, viewerAdminId: widget.adminId, viewerAdminName: widget.adminName)),
             ),
           ),
         ),
