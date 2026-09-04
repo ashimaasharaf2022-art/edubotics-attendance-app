@@ -9,6 +9,8 @@ import 'admin_payslip_requests_screen.dart';
 import 'admin_leave_screen.dart';
 import 'announcement_detail_screen.dart';
 import 'account_settings_screen.dart';
+import 'admin_activity_log_screen.dart';
+import 'manage_admins_screen.dart';
 import '../utils/attachment_upload.dart';
 
 // Dark palette used only for this screen's hero header, matching the
@@ -264,32 +266,9 @@ class _AdminDashboardState extends State<AdminDashboard> {
                           onPressed: uploading
                               ? null
                               : () async {
-                                  final source = await showModalBottomSheet<ImageSource>(
-                                    context: context,
-                                    builder: (_) => SafeArea(
-                                      child: Wrap(
-                                        children: [
-                                          ListTile(
-                                            leading: const Icon(Icons.photo_camera),
-                                            title: const Text('Take Photo'),
-                                            onTap: () => Navigator.pop(context, ImageSource.camera),
-                                          ),
-                                          ListTile(
-                                            leading: const Icon(Icons.photo_library),
-                                            title: const Text('Choose from Gallery'),
-                                            onTap: () => Navigator.pop(context, ImageSource.gallery),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  );
-                                  if (source == null) return;
                                   setSheetState(() => uploading = true);
                                   try {
-                                    final res = await AttachmentUpload.pickAndUploadImage(
-                                      folder: 'announcements',
-                                      source: source,
-                                    );
+                                    final res = await AttachmentUpload.pickAndUploadImage('announcements');
                                     if (res != null) {
                                       setSheetState(() => attachment = res);
                                     }
@@ -669,6 +648,46 @@ class _AdminDashboardState extends State<AdminDashboard> {
             ],
           ),
         ),
+        if (widget.isSuperAdmin) ...[
+          const SizedBox(height: 12),
+          IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(
+                  child: _quickActionCard(
+                    Icons.manage_accounts_outlined,
+                    'Manage Admins',
+                    'Grant or revoke admin access',
+                    AppColors.warning,
+                    () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => ManageAdminsScreen(
+                          superAdminId: widget.employeeId,
+                          superAdminName: widget.employeeName ?? widget.employeeId,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _quickActionCard(
+                    Icons.history_outlined,
+                    'Admin Activity',
+                    'Monitor administrative activity',
+                    AppColors.indigo,
+                    () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const AdminActivityLogScreen()),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ],
     );
   }

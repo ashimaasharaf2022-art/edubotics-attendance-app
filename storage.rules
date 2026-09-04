@@ -1,0 +1,13 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    // The app currently uses its own Realtime Database login rather than
+    // Firebase Authentication. Keep public access limited to announcement
+    // attachments and cap each upload to 10 MB.
+    match /announcements/{fileName} {
+      allow read: if true;
+      allow write: if request.resource.size < 10 * 1024 * 1024;
+    }
+  }
+}

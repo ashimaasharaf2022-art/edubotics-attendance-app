@@ -1,4 +1,5 @@
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 /// Handles persisting the logged-in user's session locally so they
 /// don't have to log in every time they open the app.
@@ -51,6 +52,7 @@ class SessionManager {
   }
 
   static Future<void> clearSession() async {
+    await FirebaseAuth.instance.signOut();
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_keyEmployeeId);
     await prefs.remove(_keyRole);

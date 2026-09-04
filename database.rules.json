@@ -20,7 +20,20 @@
         "$date": { ".read": true, ".write": true }
       }
     },
-    "users": { ".read": true, "$employeeId": { ".read": true, ".write": true } },
+    "users": {
+      ".read": true,
+      "$employeeId": {
+        ".read": true,
+        ".write": true,
+        ".validate": "(!data.exists() && newData.child('role').val() === 'employee') || (data.exists() && newData.child('role').val() === data.child('role').val())",
+        "role": {
+          ".validate": "newData.val() === 'employee' || newData.val() === 'admin' || newData.val() === 'superadmin'"
+        },
+        "adminAccess": {
+          ".validate": "newData.isBoolean()"
+        }
+      }
+    },
     "LeaveRequests": { ".read": true, "$employeeId": { "$requestId": { ".read": true, ".write": true } } },
     "Notifications": { ".read": true, "$employeeId": { "$notifId": { ".read": true, ".write": true } } },
     "AdminActivityLog": { ".read": true, ".write": true },

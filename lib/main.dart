@@ -1,11 +1,11 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 import 'firebase_options.dart';
 import 'screens/login_screens.dart';
 import 'screens/employee_shell.dart';
-import 'screens/admin_shell.dart';
 import 'utils/session_manager.dart';
 import 'utils/notification_helper.dart';
 import 'utils/app_colors.dart';
@@ -99,32 +99,20 @@ class _SessionGateState extends State<SessionGate> {
 
     if (!mounted) return;
 
-    if (session == null) {
+    if (session == null || FirebaseAuth.instance.currentUser == null) {
+      await SessionManager.clearSession();
       Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const LoginScreen()));
       return;
     }
 
-    final role = session["role"];
     final employeeId = session["employeeId"]!;
-    final employeeName = session["employeeName"];
 
-    if (role == "admin" || role == "superadmin") {
-  Navigator.pushReplacement(
-    context,
-    MaterialPageRoute(
-      builder: (_) => AdminShell(
-        employeeId: employeeId,
-        employeeName: (employeeName == null || employeeName.isEmpty) ? null : employeeName,
-        isSuperAdmin: role == "superadmin",
-      ),
-    ),
-  );
-} else {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => EmployeeShell(employeeId: employeeId)),
-      );
-    }
+    // Admins and super admins are employees too. They start at My Dashboard
+    // and can explicitly open their privileged panel from Account Settings.
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (_) => EmployeeShell(employeeId: employeeId)),
+    );
   }
 
   @override

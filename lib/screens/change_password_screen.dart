@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_database/firebase_database.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../utils/app_colors.dart';
 
 class ChangePasswordScreen extends StatefulWidget {
@@ -17,8 +16,6 @@ class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
   final _newController = TextEditingController();
   final _confirmController = TextEditingController();
 
-  late DatabaseReference dbRef;
-
   bool isSaving = false;
   bool obscureCurrent = true;
   bool obscureNew = true;
@@ -27,11 +24,6 @@ class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
   @override
   void initState() {
     super.initState();
-    dbRef = FirebaseDatabase.instanceFor(
-      app: Firebase.app(),
-      databaseURL:
-          "https://edubotics-attendance-default-rtdb.asia-southeast1.firebasedatabase.app",
-    ).ref();
   }
 
   @override
@@ -56,8 +48,8 @@ class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
       return;
     }
 
-    if (newPass.length < 4) {
-      _showMessage("New password must be at least 4 characters");
+    if (newPass.length < 6) {
+      _showMessage("New password must be at least 6 characters");
       return;
     }
 
@@ -74,29 +66,31 @@ class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
     setState(() => isSaving = true);
 
     try {
-      final userRef = dbRef.child("users").child(widget.employeeId);
-      final snapshot = await userRef.get();
-
-      if (!snapshot.exists) {
-        setState(() => isSaving = false);
-        _showMessage("User record not found");
-        return;
+      final user = FirebaseAuth.instance.currentUser;
+      final email = user?.email;
+      if (user == null || email == null) {
+        throw StateError('Please sign in again before changing your password.');
       }
 
-      final data = Map<dynamic, dynamic>.from(snapshot.value as Map);
-
-      if (data["password"].toString() != current) {
-        setState(() => isSaving = false);
-        _showMessage("Current password is incorrect");
-        return;
-      }
-
-      await userRef.update({"password": newPass});
+      await user.reauthenticateWithCredential(
+        EmailAuthProvider.credential(email: email, password: current),
+      );
+      await user.updatePassword(newPass);
 
       if (!mounted) return;
       setState(() => isSaving = false);
       _showMessage("Password changed successfully");
       Navigator.pop(context);
+    } on FirebaseAuthException catch (e) {
+      if (!mounted) return;
+      setState(() => isSaving = false);
+      if (e.code == 'wrong-password' || e.code == 'invalid-credential') {
+        _showMessage('Current password is incorrect');
+      } else if (e.code == 'requires-recent-login') {
+        _showMessage('Please sign out and sign in again, then retry.');
+      } else {
+        _showMessage(e.message ?? 'Unable to change password.');
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() => isSaving = false);

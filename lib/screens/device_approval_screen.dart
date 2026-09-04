@@ -5,7 +5,6 @@ import '../utils/app_colors.dart';
 import '../utils/session_manager.dart';
 import '../utils/device_helper.dart';
 import 'employee_shell.dart';
-import 'admin_shell.dart';
 import 'login_screens.dart';
 
 class DeviceApprovalScreen extends StatefulWidget {
@@ -123,25 +122,11 @@ class _DeviceApprovalScreenState extends State<DeviceApprovalScreen> {
 
       if (!mounted) return;
 
-     if (widget.role == "superadmin") {
-  Navigator.pushAndRemoveUntil(
-    context,
-    MaterialPageRoute(
-      builder: (_) => AdminShell(
-        employeeId: widget.employeeId,
-        employeeName: widget.employeeName,
-        isSuperAdmin: true,
-      ),
-    ),
-    (route) => false,
-  );
-} else {
-  Navigator.pushAndRemoveUntil(
-    context,
-    MaterialPageRoute(builder: (_) => EmployeeShell(employeeId: widget.employeeId)),
-    (route) => false,
-  );
-}
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (_) => EmployeeShell(employeeId: widget.employeeId)),
+        (route) => false,
+      );
     } catch (e) {
       if (!mounted) return;
       setState(() => verifying = false);

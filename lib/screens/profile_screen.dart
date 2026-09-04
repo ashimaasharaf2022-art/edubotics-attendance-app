@@ -43,6 +43,7 @@ class ProfileScreen extends StatefulWidget {
   final bool viewerIsSuperAdmin;
   final String? viewerAdminId;
   final String? viewerAdminName;
+  final VoidCallback? onSwitchToMyDashboard;
 
   const ProfileScreen({
     super.key,
@@ -55,6 +56,7 @@ class ProfileScreen extends StatefulWidget {
     this.viewerIsSuperAdmin = false,
     this.viewerAdminId,
     this.viewerAdminName,
+    this.onSwitchToMyDashboard,
   });
 
   @override
@@ -989,10 +991,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       const SizedBox(height: 16),
                       _buildPersonalInfoCard(),
                       const SizedBox(height: 16),
-                      _buildActionSections(
-                        isSuper,
-                        isAdmin,
-                      ),
+                      _buildActionSections(),
                     ],
                   ),
                 ),
@@ -1772,12 +1771,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  Widget _buildActionSections(
-    bool isSuper,
-    bool isAdmin,
-  ) {
-    // Admin management actions section is no longer shown on this screen.
-    return const SizedBox.shrink();
+  Widget _buildActionSections() {
+    if (widget.onSwitchToMyDashboard == null) return const SizedBox.shrink();
+
+    return _section('Dashboard', [
+      _tile(
+        Icons.person_outline,
+        'Switch to My Dashboard',
+        widget.onSwitchToMyDashboard!,
+      ),
+    ]);
   }
 
   Widget _section(

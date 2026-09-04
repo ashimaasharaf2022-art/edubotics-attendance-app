@@ -3,13 +3,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_database/firebase_database.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../utils/session_manager.dart';
 import '../utils/device_helper.dart';
 import '../utils/notification_center.dart';
 import '../utils/email_alert_helper.dart';
 import '../utils/app_colors.dart';
 import 'employee_shell.dart';
-import 'admin_shell.dart';
 import 'device_approval_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -116,23 +116,28 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() => isLoggingIn = true);
 
     try {
-      final user = await _findUser(empId);
-
-      if (user == null) {
-        if (!mounted) return;
-
-        setState(() => isLoggingIn = false);
-        showMessage("Employee Not Found");
-        return;
+      // Employees keep entering their Employee ID. Firebase Auth uses a
+      // private, deterministic address that is never shown in the UI.
+      final authCredential = await FirebaseAuth.instance
+          .signInWithEmailAndPassword(
+        email: '${empId.toLowerCase()}@workora.internal',
+        password: password,
+      );
+      final authUid = authCredential.user?.uid;
+      if (authUid == null) {
+        throw FirebaseAuthException(
+          code: 'missing-user',
+          message: 'Firebase did not return a signed-in user.',
+        );
       }
 
-      final storedPassword = user["password"]?.toString() ?? "";
+      final user = await _findUser(empId);
 
-      if (storedPassword != password) {
+      if (user == null || user['authUid']?.toString() != authUid) {
+        await FirebaseAuth.instance.signOut();
         if (!mounted) return;
-
         setState(() => isLoggingIn = false);
-        showMessage("Wrong Password");
+        showMessage('This Employee ID is not linked to this sign-in account.');
         return;
       }
 
@@ -229,28 +234,21 @@ class _LoginScreenState extends State<LoginScreen> {
 
       setState(() => isLoggingIn = false);
 
-      // Both Admin and Super Admin go to the Admin Panel.
-      // Only role == "superadmin" gets Super Admin privileges.
-      if (role == "superadmin" || role == "admin") {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (_) => AdminShell(
-              employeeId: empId,
-              employeeName: name,
-              isSuperAdmin: role == "superadmin",
-            ),
-          ),
-        );
+      // Privileged users are employees too. Everyone starts at My Dashboard
+      // and opens a privileged panel intentionally from Account Settings.
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => EmployeeShell(employeeId: empId)),
+      );
+    } on FirebaseAuthException catch (e) {
+      if (!mounted) return;
+      setState(() => isLoggingIn = false);
+      if (e.code == 'invalid-credential' || e.code == 'wrong-password') {
+        showMessage('Incorrect Employee ID or password.');
+      } else if (e.code == 'user-not-found') {
+        showMessage('Your secure account has not been created yet. Please contact Super Admin.');
       } else {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (_) => EmployeeShell(
-              employeeId: empId,
-            ),
-          ),
-        );
+        showMessage(e.message ?? 'Unable to sign in.');
       }
     } catch (e) {
       if (!mounted) return;

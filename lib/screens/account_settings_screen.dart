@@ -113,8 +113,7 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
   }
 
   void _switchToAdminPanel() {
-    Navigator.pushReplacement(
-      context,
+    Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(
         builder: (_) => AdminShell(
           employeeId: widget.employeeId,
@@ -122,6 +121,7 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
           isSuperAdmin: isSuperAdmin,
         ),
       ),
+      (route) => false,
     );
   }
 
@@ -239,8 +239,16 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
                   ]),
                   if (hasAdminAccess) ...[
                     const SizedBox(height: 10),
-                    _section("Admin", [
-                      _tile(Icons.admin_panel_settings_outlined, "Switch to Admin Panel", _switchToAdminPanel),
+                    _section(isSuperAdmin ? "Super Admin" : "Admin", [
+                      _tile(
+                        isSuperAdmin
+                            ? Icons.shield_outlined
+                            : Icons.admin_panel_settings_outlined,
+                        isSuperAdmin
+                            ? "Switch to Super Admin Panel"
+                            : "Switch to Admin Panel",
+                        _switchToAdminPanel,
+                      ),
                     ]),
                   ],
                   const SizedBox(height: 10),
