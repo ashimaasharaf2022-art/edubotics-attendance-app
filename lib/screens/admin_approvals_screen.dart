@@ -276,7 +276,7 @@ class _AdminApprovalsScreenState extends State<AdminApprovalsScreen> with Single
           requests.forEach((requestId, value) {
             final req = Map<dynamic, dynamic>.from(value as Map);
             if (req["status"] == "pending" || req["status"] == "otp_ready") {
-              items.add({...req, "employeeId": empId, "requestId": requestId});
+              items.add({...Map<String, dynamic>.from(req), "employeeId": empId, "requestId": requestId});
             }
           });
         });
@@ -349,7 +349,7 @@ class _AdminApprovalsScreenState extends State<AdminApprovalsScreen> with Single
           dates.forEach((dateKey, value) {
             final req = Map<dynamic, dynamic>.from(value as Map);
             if (req["status"] == "pending") {
-              items.add({...req, "employeeId": empId, "dateKey": dateKey});
+              items.add({...Map<String, dynamic>.from(req), "employeeId": empId, "dateKey": dateKey});
             }
           });
         });
@@ -429,7 +429,7 @@ class _AdminApprovalsScreenState extends State<AdminApprovalsScreen> with Single
             // This queue is reserved for an employee who forgot to check out.
             // Short-day / compensation records have their own Attendance tab.
             if (request['status'] == 'pending' && request['type'] == 'auto_checkout') {
-              requests.add({...request, 'employeeId': employeeId.toString(), 'date': date.toString()});
+              requests.add({...Map<String, dynamic>.from(request), 'employeeId': employeeId.toString(), 'date': date.toString()});
             }
           });
         });

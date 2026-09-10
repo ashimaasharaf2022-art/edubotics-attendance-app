@@ -19,7 +19,12 @@ class LocationResult {
     this.isMocked = false,
   });
 
-  bool get isWithinOfficeRange => distanceFromOffice <= AppConstants.officeRadiusMeters;
+  // Geofencing removed by request: punch in/out is allowed from any
+  // location now, so this always reports "within range" regardless of
+  // the actual distance. distanceFromOffice is still computed and shown
+  // in the UI (e.g. live location screen) — only the enforcement is
+  // disabled, not the distance display itself.
+  bool get isWithinOfficeRange => true;
 }
 
 class LocationHelper {

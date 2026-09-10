@@ -4,6 +4,7 @@ const admin = require('firebase-admin');
 
 admin.initializeApp();
 const dateKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
 // This backend job runs even when the app is closed. An office record remains
 // pending until an admin accepts the request and chooses the actual checkout
 // time. WFH records are completed automatically at the boundary.
