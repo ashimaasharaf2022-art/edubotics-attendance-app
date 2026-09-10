@@ -4,7 +4,6 @@ import 'admin_dashboard.dart';
 import 'admin_attendance_screen.dart';
 import 'reports_screen.dart';
 import 'profile_screen.dart';
-import 'employee_shell.dart';
 
 class AdminShell extends StatefulWidget {
   final String employeeId;
@@ -28,36 +27,22 @@ class _AdminShellState extends State<AdminShell> {
       AdminDashboard(employeeId: widget.employeeId, employeeName: widget.employeeName, isSuperAdmin: widget.isSuperAdmin),
       AdminAttendanceScreen(adminId: widget.employeeId, adminName: adminName),
       const ReportsScreen(),
-      ProfileScreen(
-        employeeId: widget.employeeId,
-        isAdmin: true,
-        isSuperAdmin: widget.isSuperAdmin,
-        onSwitchToMyDashboard: () => Navigator.of(context).pushAndRemoveUntil(
-          MaterialPageRoute(builder: (_) => EmployeeShell(employeeId: widget.employeeId)),
-          (route) => false,
-        ),
-      ),
+      ProfileScreen(employeeId: widget.employeeId, isAdmin: true, isSuperAdmin: widget.isSuperAdmin),
     ];
 
-    return PopScope(
-      canPop: currentIndex == 0,
-      onPopInvokedWithResult: (_, __) {
-        if (currentIndex != 0) setState(() => currentIndex = 0);
-      },
-      child: Scaffold(
-        body: IndexedStack(index: currentIndex, children: tabs),
-        bottomNavigationBar: NavigationBar(
-          selectedIndex: currentIndex,
-          onDestinationSelected: (i) => setState(() => currentIndex = i),
-          backgroundColor: AppColors.surface,
-          indicatorColor: AppColors.primary.withOpacity(0.15),
-          destinations: [
-            const NavigationDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home, color: AppColors.primary), label: "Home"),
-            const NavigationDestination(icon: Icon(Icons.calendar_month_outlined), selectedIcon: Icon(Icons.calendar_month, color: AppColors.primary), label: "Attendance"),
-            const NavigationDestination(icon: Icon(Icons.analytics_outlined), selectedIcon: Icon(Icons.analytics, color: AppColors.primary), label: "Reports"),
-            const NavigationDestination(icon: Icon(Icons.person_outline), selectedIcon: Icon(Icons.person, color: AppColors.primary), label: "Profile"),
-          ],
-        ),
+    return Scaffold(
+      body: IndexedStack(index: currentIndex, children: tabs),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: currentIndex,
+        onDestinationSelected: (i) => setState(() => currentIndex = i),
+        backgroundColor: AppColors.surface,
+        indicatorColor: AppColors.primary.withOpacity(0.15),
+        destinations: [
+          const NavigationDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home, color: AppColors.primary), label: "Home"),
+          const NavigationDestination(icon: Icon(Icons.calendar_month_outlined), selectedIcon: Icon(Icons.calendar_month, color: AppColors.primary), label: "Attendance"),
+          const NavigationDestination(icon: Icon(Icons.analytics_outlined), selectedIcon: Icon(Icons.analytics, color: AppColors.primary), label: "Reports"),
+          const NavigationDestination(icon: Icon(Icons.person_outline), selectedIcon: Icon(Icons.person, color: AppColors.primary), label: "Profile"),
+        ],
       ),
     );
   }
