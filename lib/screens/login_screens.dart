@@ -144,11 +144,10 @@ class _LoginScreenState extends State<LoginScreen> {
           ? null
           : nameValue;
 
-      // Device fingerprint checks only apply to native mobile builds.
-      // On web there's no reliable hardware device ID (browsers can be
-      // cleared, switched, or used from any machine), so we skip the
-      // "one device per employee" enforcement entirely for web logins.
-      if (!kIsWeb) {
+      // Super Admin is a separate account, not an employee device-managed account.
+      // Do not perform device registration/approval writes for Super Admin.
+      // This also keeps Super Admin login independent from DeviceApprovalRequests.
+      if (!kIsWeb && role != "superadmin") {
         final registeredDeviceValue =
             user["registeredDeviceId"]?.toString().trim();
 

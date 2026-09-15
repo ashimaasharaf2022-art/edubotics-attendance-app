@@ -14,7 +14,14 @@ enum _AttendancePeriod { daily, weekly, monthly }
 class AdminAttendanceScreen extends StatefulWidget {
   final String adminId;
   final String adminName;
-  const AdminAttendanceScreen({super.key, required this.adminId, required this.adminName});
+  final VoidCallback? onBackToHome;
+
+  const AdminAttendanceScreen({
+    super.key,
+    required this.adminId,
+    required this.adminName,
+    this.onBackToHome,
+  });
 
   @override
   State<AdminAttendanceScreen> createState() => _AdminAttendanceScreenState();
@@ -71,19 +78,34 @@ class _AdminAttendanceScreenState extends State<AdminAttendanceScreen> with Sing
   }
   bool _isEmployee(Map<dynamic, dynamic> user) => user['role']?.toString().toLowerCase() != 'superadmin';
 
-  /// Classification always runs through AttendanceCalculator using the real
-  /// punch-in and punch-out times — including admin-verified auto
-  /// checkouts. There is no forced full-day override: a verified day is a
-  /// full day only if it actually reaches 9 gross hours, otherwise it's a
-  /// mis-punch like any other day.
+  /// Returns the normal daily classification only when the record has a
+  /// real punch-out. MIS-PUNCH / temporary auto-checkout records are workflow
+  /// states and must never be calculated using the 11:59 PM placeholder.
   AttendanceResult? _result(Map<dynamic, dynamic> record) {
+    final status = record['status']?.toString().toUpperCase();
+    if (status == 'MIS-PUNCH' ||
+        status == 'AUTO CHECKOUT PENDING' ||
+        status == 'AUTO CHECKED OUT') {
+      return null;
+    }
     if (record['punchIn'] == null || record['punchOut'] == null) return null;
-    return AttendanceCalculator.calculate(punchIn: record['punchIn'].toString(), punchOut: record['punchOut'].toString(), workFromHome: record['workFromHome'] == true);
+    return AttendanceCalculator.calculate(
+      punchIn: record['punchIn'].toString(),
+      punchOut: record['punchOut'].toString(),
+      workFromHome: record['workFromHome'] == true,
+    );
   }
 
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
+      leading: widget.onBackToHome == null
+          ? null
+          : IconButton(
+              tooltip: 'Back to Admin Home',
+              icon: const Icon(Icons.arrow_back),
+              onPressed: widget.onBackToHome,
+            ),
       title: const Text('Attendance'),
       actions: [
         IconButton(onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AddEmployeeScreen())).then((_) => _refresh()), icon: const Icon(Icons.person_add_alt_1), tooltip: 'Add employee'),
@@ -229,21 +251,60 @@ class _AdminAttendanceScreenState extends State<AdminAttendanceScreen> with Sing
   Widget _allAttendance(Map<dynamic, dynamic> users, Map<dynamic, dynamic> attendance) {
     final keys = _periodKeys;
     final cards = <Widget>[];
+
     for (final entry in _employeeEntries(users)) {
-      final id = entry.key.toString(); final user = _map(entry.value); final records = _map(attendance[id]);
-      var full = 0, mis = 0, pending = 0, worked = 0;
+      final id = entry.key.toString();
+      final user = _map(entry.value);
+      final records = _map(attendance[id]);
+
+      var full = 0;
+      var workPending = 0;
+      var absent = 0;
+      var misPunchPending = 0;
+      var worked = 0;
+
       for (final key in keys) {
-        final record = _map(records[key]);
-        if (record['status'] == 'Auto Checkout Pending') { pending++; continue; }
-        final result = _result(record); if (result == null) continue;
+        final raw = records[key];
+        final record = _map(raw);
+        final status = record['status']?.toString().toUpperCase();
+
+        if (status == 'MIS-PUNCH' ||
+            status == 'AUTO CHECKOUT PENDING' ||
+            status == 'AUTO CHECKED OUT') {
+          misPunchPending++;
+          continue;
+        }
+
+        final result = _result(record);
+
+        // A missing record for a date in the selected period means there was
+        // no attendance for that date, so it is ABSENT.
+        if (raw == null || result == null) {
+          absent++;
+          continue;
+        }
+
         worked += (result.netHours * 60).round();
-        if (result.dayType == DayType.fullDay) full++;
-        if (result.dayType == DayType.misPunch) mis++;
+
+        switch (result.dayType) {
+          case DayType.fullDay:
+            full++;
+            break;
+          case DayType.workPending:
+            workPending++;
+            break;
+          case DayType.absent:
+            absent++;
+            break;
+        }
       }
+
       final subtitle = '${_pluralize(full, 'full day', 'full days')} • '
-          '${_pluralize(mis, 'mis-punch', 'mis-punches')}'
-          '${pending > 0 ? ' • ${_pluralize(pending, 'auto checkout pending', 'auto checkouts pending')}' : ''} • '
+          '${_pluralize(workPending, 'work-pending', 'work-pending days')} • '
+          '${_pluralize(absent, 'absent', 'absent days')}'
+          '${misPunchPending > 0 ? ' • ${_pluralize(misPunchPending, 'MIS-PUNCH pending', 'MIS-PUNCHes pending')}' : ''} • '
           '${AttendanceCalculator.formatHours(worked / 60)}';
+
       cards.add(
         Card(
           child: ListTile(
@@ -252,13 +313,32 @@ class _AdminAttendanceScreenState extends State<AdminAttendanceScreen> with Sing
             trailing: const Icon(Icons.chevron_right),
             onTap: () => Navigator.push(
               context,
-              MaterialPageRoute(builder: (_) => HistoryScreen(employeeId: id, employeeName: user['name']?.toString() ?? id, viewerIsAdmin: true, viewerAdminId: widget.adminId, viewerAdminName: widget.adminName)),
+              MaterialPageRoute(
+                builder: (_) => HistoryScreen(
+                  employeeId: id,
+                  employeeName: user['name']?.toString() ?? id,
+                  viewerIsAdmin: true,
+                  viewerAdminId: widget.adminId,
+                  viewerAdminName: widget.adminName,
+                ),
+              ),
             ),
           ),
         ),
       );
     }
-    return Column(children: [_periodControls(), Expanded(child: ListView(padding: const EdgeInsets.all(12), children: cards))]);
+
+    return Column(
+      children: [
+        _periodControls(),
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.all(12),
+            children: cards,
+          ),
+        ),
+      ],
+    );
   }
 
   Widget _periodControls() => Padding(padding: const EdgeInsets.all(12), child: Row(children: [
@@ -266,35 +346,197 @@ class _AdminAttendanceScreenState extends State<AdminAttendanceScreen> with Sing
     IconButton(icon: const Icon(Icons.calendar_today_outlined), tooltip: 'Choose date', onPressed: () async { final date = await showDatePicker(context: context, initialDate: _reference, firstDate: DateTime(2020), lastDate: DateTime.now()); if (date != null) setState(() => _reference = date); }),
   ]));
 
-  Widget _compensation(Map<dynamic, dynamic> users, Map<dynamic, dynamic> attendance, Map<dynamic, dynamic> summaries) {
+  Widget _compensation(
+    Map<dynamic, dynamic> users,
+    Map<dynamic, dynamic> attendance,
+    Map<dynamic, dynamic> summaries,
+  ) {
     final cards = <Widget>[];
+
     for (final entry in _employeeEntries(users)) {
-      final id = entry.key.toString(); final name = _map(entry.value)['name']?.toString() ?? id;
-      final records = _map(attendance[id]); final activity = <String>[];
-      final dates = records.keys.map((key) => key.toString()).toList()..sort((a, b) => b.compareTo(a));
-      for (final date in dates) {
-        final result = _result(_map(records[date]));
-        if (result?.dayType == DayType.misPunch) activity.add('$date • owes ${AttendanceCalculator.formatHours(result!.shortfallHours)}');
-        if ((result?.extraHours ?? 0) > 0) activity.add('$date • earned ${AttendanceCalculator.formatHours(result!.extraHours)} extra');
+      final id = entry.key.toString();
+      final name = _map(entry.value)['name']?.toString() ?? id;
+      final records = _map(attendance[id]);
+      final allocation = _buildCompensationAllocation(records);
+
+      final activity = <String>[];
+
+      for (final item in allocation.pendingDays) {
+        final original = item.deficitMinutes;
+        final applied = item.compensatedMinutes;
+        final remaining = item.remainingMinutes;
+
+        if (applied <= 0) {
+          activity.add(
+            '${item.date} • Work-Pending ${AttendanceCalculator.formatHours(original / 60)} outstanding',
+          );
+        } else if (remaining == 0) {
+          activity.add(
+            '${item.date} • ${AttendanceCalculator.formatHours(original / 60)} pending fully compensated → Full Day',
+          );
+        } else {
+          activity.add(
+            '${item.date} • ${AttendanceCalculator.formatHours(applied / 60)} compensated, '
+            '${AttendanceCalculator.formatHours(remaining / 60)} still Work-Pending',
+          );
+        }
       }
-      final outstanding = _outstandingMinutes(records);
-      if (activity.isNotEmpty || outstanding > 0) cards.add(Card(child: ExpansionTile(title: Text(name), subtitle: Text('Outstanding: ${AttendanceCalculator.formatHours(outstanding / 60)}'), children: activity.isEmpty ? const [ListTile(title: Text('No compensation activity yet.'))] : activity.map((text) => ListTile(leading: const Icon(Icons.schedule), title: Text(text))).toList())));
+
+      for (final item in allocation.extraDays) {
+        activity.add(
+          '${item.date} • earned ${AttendanceCalculator.formatHours(item.extraMinutes / 60)} extra',
+        );
+      }
+
+      final outstanding = allocation.remainingOutstandingMinutes;
+
+      if (activity.isNotEmpty || outstanding > 0) {
+        cards.add(
+          Card(
+            child: ExpansionTile(
+              title: Text(name),
+              subtitle: Text(
+                'Outstanding: ${AttendanceCalculator.formatHours(outstanding / 60)}',
+              ),
+              children: activity.isEmpty
+                  ? const [
+                      ListTile(
+                        title: Text('No compensation activity yet.'),
+                      ),
+                    ]
+                  : activity
+                      .map(
+                        (text) => ListTile(
+                          leading: const Icon(Icons.schedule),
+                          title: Text(text),
+                        ),
+                      )
+                      .toList(),
+            ),
+          ),
+        );
+      }
     }
-    return cards.isEmpty ? const Center(child: Text('No mis-punch or compensation records.')) : ListView(padding: const EdgeInsets.all(12), children: cards);
+
+    return cards.isEmpty
+        ? const Center(child: Text('No Work-Pending or compensation records.'))
+        : ListView(
+            padding: const EdgeInsets.all(12),
+            children: cards,
+          );
   }
 
-  int _outstandingMinutes(Map<dynamic, dynamic> records) {
+  _CompensationAllocation _buildCompensationAllocation(
+    Map<dynamic, dynamic> records,
+  ) {
+    final pending = <_PendingDay>[];
+    final extras = <_ExtraDay>[];
+
     final dates = records.keys.map((key) => key.toString()).toList()..sort();
-    var balance = 0;
+
     for (final date in dates) {
       final record = _map(records[date]);
-      if (record['punchIn'] == null || record['punchOut'] == null || record['autoPunchOut'] == true || record['workFromHome'] == true) continue;
-      final result = AttendanceCalculator.calculate(punchIn: record['punchIn'].toString(), punchOut: record['punchOut'].toString());
-      balance += (result.shortfallHours * 60).round() - (result.extraHours * 60).round();
-      if (balance < 0) balance = 0;
+      final status = record['status']?.toString().toUpperCase();
+
+      // Never calculate a deficit from a temporary 11:59 PM auto checkout.
+      if (status == 'MIS-PUNCH' ||
+          status == 'AUTO CHECKOUT PENDING' ||
+          status == 'AUTO CHECKED OUT') {
+        continue;
+      }
+
+      final result = _result(record);
+      if (result == null) continue;
+
+      final deficit = (result.shortfallHours * 60).round();
+      final extra = (result.extraHours * 60).round();
+
+      if (deficit > 0) {
+        pending.add(_PendingDay(date: date, deficitMinutes: deficit));
+      }
+      if (extra > 0) {
+        extras.add(_ExtraDay(date: date, extraMinutes: extra));
+      }
     }
-    return balance;
+
+    // User rule: compensation is applied to the LEAST Work-Pending
+    // hour/deficit day first, not simply in chronological order.
+    pending.sort((a, b) {
+      final byDeficit = a.deficitMinutes.compareTo(b.deficitMinutes);
+      return byDeficit != 0 ? byDeficit : a.date.compareTo(b.date);
+    });
+
+    var compensationPool =
+        extras.fold<int>(0, (sum, item) => sum + item.extraMinutes);
+
+    for (final day in pending) {
+      final applied = compensationPool >= day.deficitMinutes
+          ? day.deficitMinutes
+          : compensationPool;
+
+      day.compensatedMinutes = applied;
+      day.remainingMinutes = day.deficitMinutes - applied;
+      compensationPool -= applied;
+
+      if (compensationPool <= 0) {
+        compensationPool = 0;
+        // Remaining pending days have no compensation.
+        break;
+      }
+    }
+
+    final remainingOutstanding = pending.fold<int>(
+      0,
+      (sum, item) => sum + item.remainingMinutes,
+    );
+
+    return _CompensationAllocation(
+      pendingDays: pending,
+      extraDays: extras,
+      remainingOutstandingMinutes: remainingOutstanding,
+    );
   }
+
+  /// Outstanding balance after applying all available extra time to the
+  /// smallest Work-Pending deficits first.
+  int _outstandingMinutes(Map<dynamic, dynamic> records) {
+    return _buildCompensationAllocation(records).remainingOutstandingMinutes;
+  }
+
+}
+
+class _PendingDay {
+  final String date;
+  final int deficitMinutes;
+  int compensatedMinutes = 0;
+  int remainingMinutes;
+
+  _PendingDay({
+    required this.date,
+    required this.deficitMinutes,
+  }) : remainingMinutes = deficitMinutes;
+}
+
+class _ExtraDay {
+  final String date;
+  final int extraMinutes;
+
+  _ExtraDay({
+    required this.date,
+    required this.extraMinutes,
+  });
+}
+
+class _CompensationAllocation {
+  final List<_PendingDay> pendingDays;
+  final List<_ExtraDay> extraDays;
+  final int remainingOutstandingMinutes;
+
+  const _CompensationAllocation({
+    required this.pendingDays,
+    required this.extraDays,
+    required this.remainingOutstandingMinutes,
+  });
 }
 
 class _AdminAttendanceData {

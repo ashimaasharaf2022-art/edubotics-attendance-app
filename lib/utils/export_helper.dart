@@ -12,10 +12,18 @@ import 'web_download/web_download.dart';
 class ExportRow {
   final String employeeId;
   final String name;
+
+  /// Number of days classified as FULL DAY.
   final int fullDays;
-  final int halfDays;
+
+  /// Number of days classified as WORK-PENDING.
+  final int workPendingDays;
+
+  /// Number of days classified as ABSENT.
   final int absentDays;
+
   final double totalHours;
+
   final String? lastStatus;
   final String? lastPunchIn;
   final String? lastPunchOut;
@@ -24,7 +32,7 @@ class ExportRow {
     required this.employeeId,
     required this.name,
     required this.fullDays,
-    required this.halfDays,
+    required this.workPendingDays,
     required this.absentDays,
     required this.totalHours,
     this.lastStatus,
@@ -57,7 +65,7 @@ class ExportHelper {
       r.name,
       r.employeeId,
       r.fullDays.toString(),
-      r.halfDays.toString(),
+      r.workPendingDays.toString(),
       r.absentDays.toString(),
       AttendanceCalculator.formatHours(r.totalHours),
     ];
@@ -102,8 +110,22 @@ class ExportHelper {
     final doc = pw.Document();
 
     final headers = isDaily
-        ? ["Employee", "ID", "In", "Out", "Status", "Hours"]
-        : ["Employee", "ID", "Full", "Half", "Absent", "Hours"];
+        ? [
+            "Employee",
+            "ID",
+            "In",
+            "Out",
+            "Status",
+            "Hours",
+          ]
+        : [
+            "Employee",
+            "ID",
+            "Full",
+            "Work-Pending",
+            "Absent",
+            "Hours",
+          ];
 
     final tableData =
         rows.map((r) => _rowToStrings(r, isDaily)).toList();
@@ -184,19 +206,33 @@ class ExportHelper {
     required bool isDaily,
   }) async {
     final workbook = ex.Excel.createExcel();
+
     final sheet = workbook[workbook.getDefaultSheet()!];
 
-    sheet.appendRow([ex.TextCellValue(title)]);
-    sheet.appendRow([ex.TextCellValue(periodLabel)]);
+    sheet.appendRow([
+      ex.TextCellValue(title),
+    ]);
+
+    sheet.appendRow([
+      ex.TextCellValue(periodLabel),
+    ]);
+
     sheet.appendRow(<ex.CellValue?>[]);
 
     final headers = isDaily
-        ? ["Employee", "ID", "In", "Out", "Status", "Hours"]
+        ? [
+            "Employee",
+            "ID",
+            "In",
+            "Out",
+            "Status",
+            "Hours",
+          ]
         : [
             "Employee",
             "ID",
             "Full Days",
-            "Half Days",
+            "Work-Pending Days",
             "Absent Days",
             "Total Hours",
           ];
@@ -207,12 +243,14 @@ class ExportHelper {
 
     for (final row in rows) {
       final values = _rowToStrings(row, isDaily);
+
       sheet.appendRow(
         values.map((value) => ex.TextCellValue(value)).toList(),
       );
     }
 
     final bytes = workbook.encode();
+
     if (bytes == null) {
       throw Exception("Could not generate Excel file.");
     }

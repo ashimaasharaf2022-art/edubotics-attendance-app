@@ -1,9 +1,20 @@
 import 'package:intl/intl.dart';
 
-/// A completed office day is either a full day or a mis-punch. The latter is
-/// deliberately separate from an absence: the employee was present, but still
-/// owes working time which can be made up on a later day.
-enum DayType { fullDay, halfDay, misPunch, absent, notMarked }
+/// Attendance classification.
+///
+/// These are the ONLY three final attendance classifications:
+///
+/// 1. Full Day
+/// 2. Work-Pending
+/// 3. Absent
+///
+/// MIS-PUNCH is NOT a DayType.
+/// It is a temporary workflow state handled outside this calculator.
+enum DayType {
+  fullDay,
+  workPending,
+  absent,
+}
 
 class AttendanceResult {
   final DayType dayType;
@@ -21,133 +32,538 @@ class AttendanceResult {
   });
 }
 
-/// One check-in/check-out pair within a day. [punchOut] is null while the
-/// session is still open (the employee hasn't checked out of it yet).
+/// Represents one punch-in / punch-out session.
 class AttendanceSession {
   final String punchIn;
   final String? punchOut;
-  const AttendanceSession({required this.punchIn, this.punchOut});
+
+  const AttendanceSession({
+    required this.punchIn,
+    this.punchOut,
+  });
 }
 
-/// The company attendance policy.
+/// Central attendance calculator.
 ///
-/// - Office employees may punch in from 08:00 and punch out any time up to
-///   11:59 PM, any number of times per day.
-/// - A full day requires 9 hours of total worked time, summed across every
-///   session that day (time in the gaps between sessions doesn't count).
-/// - The 1:00 PM\u20132:00 PM lunch hour ALWAYS counts toward the 9 hours,
-///   whether the employee stayed checked in through it or checked out and
-///   back in around it \u2014 as long as lunch actually falls within their day
-///   (from first punch-in to last punch-out). Only the portion of lunch not
-///   already covered by a session is added, so it's never double-counted.
-/// - Less than 9 hours total is a mis-punch and the shortfall is owed.
-/// - More than 9 hours is extra work, which offsets earlier shortfall.
-/// - Approved work-from-home days are always full days once checked out.
+/// RULES
+/// -----
+/// Required working time = 9 hours.
+///
+/// Lunch:
+/// 1:00 PM - 2:00 PM
+///
+/// Lunch COUNTS as working time.
+///
+/// Final classifications:
+///
+/// >= 9 hours
+///     -> FULL DAY
+///
+/// < 9 hours with completed attendance
+///     -> WORK-PENDING
+///
+/// No attendance
+///     -> ABSENT
+///
+/// MIS-PUNCH:
+///     -> NOT calculated here.
+///     -> Handled by AttendanceTabScreen / HistoryScreen.
+///     -> Actual punch-out is supplied later by admin.
 class AttendanceCalculator {
+  /// Required working time = 9 hours.
   static const int requiredMinutes = 9 * 60;
-  static const int checkInStartMinutes = 8 * 60;
-  // Punch-out is allowed up to 11:59 PM (not midnight).
-  static const int checkOutEndMinutes = 23 * 60 + 59;
 
+  /// Lunch starts at 1:00 PM.
   static const int lunchStart = 13 * 60;
+
+  /// Lunch ends at 2:00 PM.
   static const int lunchEnd = 14 * 60;
 
-  // Shared literal so every file (auto-checkout, admin screens, etc.) agrees
-  // on the forced end-of-day punch-out time.
+  /// Temporary display/workflow value only.
+  ///
+  /// IMPORTANT:
+  /// This is NOT an actual punch-out.
+  ///
+  /// It must NEVER be used to calculate working hours.
   static const String autoCheckoutTime = '11:59 PM';
 
+  // ===========================================================================
+  // TIME CONVERSION
+  // ===========================================================================
+
+  /// Converts a time such as:
+  ///
+  /// 9:30 AM
+  /// 6:45 PM
+  ///
+  /// into minutes from midnight.
   static int? toMinutes(String? timeStr) {
-    if (timeStr == null || timeStr.trim().isEmpty || timeStr == '--:--') return null;
-    try {
-      final dt = DateFormat('h:mm a').parse(timeStr.trim());
-      return dt.hour * 60 + dt.minute;
-    } catch (_) {
+    if (timeStr == null ||
+        timeStr.trim().isEmpty ||
+        timeStr.trim() == '--:--') {
       return null;
     }
+
+    final text = timeStr.trim();
+
+    // Normal 12-hour format.
+    try {
+      final dt = DateFormat('h:mm a').parse(
+        text,
+      );
+
+      return dt.hour * 60 + dt.minute;
+    } catch (_) {}
+
+    // Also support 24-hour values for backward compatibility.
+    try {
+      final dt = DateFormat('HH:mm').parse(
+        text,
+      );
+
+      return dt.hour * 60 + dt.minute;
+    } catch (_) {}
+
+    // Final flexible parser.
+    final match = RegExp(
+      r'^(\d{1,2}):(\d{2})\s*([AaPp][Mm])?$',
+    ).firstMatch(text);
+
+    if (match != null) {
+      var hour =
+          int.tryParse(match.group(1)!) ?? 0;
+
+      final minute =
+          int.tryParse(match.group(2)!) ?? 0;
+
+      final period =
+          match.group(3)?.toLowerCase();
+
+      if (period == 'pm' && hour < 12) {
+        hour += 12;
+      }
+
+      if (period == 'am' && hour == 12) {
+        hour = 0;
+      }
+
+      if (hour >= 0 &&
+          hour < 24 &&
+          minute >= 0 &&
+          minute < 60) {
+        return hour * 60 + minute;
+      }
+    }
+
+    return null;
   }
 
-  static double computeNetHours(int inMinutes, int outMinutes) {
-    final rawMinutes = outMinutes - inMinutes;
-    if (rawMinutes < 0) return 0;
-    return rawMinutes / 60.0;
+  // ===========================================================================
+  // SINGLE SESSION
+  // ===========================================================================
+
+  /// Calculates one completed attendance session.
+  ///
+  /// Example:
+  ///
+  /// 9:30 AM -> 6:30 PM
+  ///
+  /// = 9 hours
+  /// = FULL DAY
+  ///
+  /// Lunch is naturally included because no lunch deduction is performed.
+  static double computeNetHours(
+    int inMinutes,
+    int outMinutes,
+  ) {
+    final difference =
+        outMinutes - inMinutes;
+
+    if (difference < 0) {
+      return 0;
+    }
+
+    return difference / 60.0;
   }
 
-  /// Single check-in/check-out day \u2014 the original shape, still fully
-  /// supported. Internally this is just a one-session call into
-  /// [calculateFromSessions], so single- and multi-session days are always
-  /// classified by the exact same rules.
+  // ===========================================================================
+  // NORMAL SINGLE-SESSION CALCULATION
+  // ===========================================================================
+
   static AttendanceResult calculate({
     required String? punchIn,
     required String? punchOut,
     bool workFromHome = false,
   }) {
-    if (punchIn == null) return AttendanceResult(dayType: DayType.absent, netHours: 0, label: 'Absent');
+    // No punch-in = ABSENT.
+    if (punchIn == null ||
+        punchIn.trim().isEmpty) {
+      return AttendanceResult(
+        dayType: DayType.absent,
+        netHours: 0,
+        label: 'Absent',
+      );
+    }
+
+    // An open punch-in is NOT a completed attendance calculation.
+    //
+    // MIS-PUNCH handling happens outside this calculator.
+    //
+    // We return ABSENT here only because AttendanceResult has no
+    // "open" state. Screens that need to distinguish an open session
+    // must check punchOut before calling this method.
+    if (punchOut == null ||
+        punchOut.trim().isEmpty) {
+      return AttendanceResult(
+        dayType: DayType.absent,
+        netHours: 0,
+        label: 'Absent',
+      );
+    }
+
     return calculateFromSessions(
-      [AttendanceSession(punchIn: punchIn, punchOut: punchOut)],
+      [
+        AttendanceSession(
+          punchIn: punchIn,
+          punchOut: punchOut,
+        ),
+      ],
       workFromHome: workFromHome,
     );
   }
 
-  /// Multiple check-in/check-out pairs in one day. Total worked time is the
-  /// SUM of each session's duration; gaps between sessions don't count,
-  /// EXCEPT the lunch hour, which is always credited (see class doc).
+  // ===========================================================================
+  // MULTIPLE SESSION CALCULATION
+  // ===========================================================================
+
+  /// Calculates attendance from multiple completed sessions.
+  ///
+  /// Example:
+  ///
+  /// Session 1:
+  /// 9:30 AM -> 1:00 PM
+  ///
+  /// Session 2:
+  /// 2:00 PM -> 6:30 PM
+  ///
+  /// Raw session time:
+  /// 3h 30m + 4h 30m = 8h
+  ///
+  /// Lunch:
+  /// 1:00 PM -> 2:00 PM = 1h
+  ///
+  /// Final:
+  /// 9h = FULL DAY
+  ///
+  /// Lunch is added only when:
+  ///
+  /// 1. The employee's overall attended period overlaps lunch.
+  /// 2. Part of the lunch period is not already represented
+  ///    by one of the attendance sessions.
+  ///
+  /// Therefore:
+  ///
+  /// 9:30 AM -> 6:30 PM
+  ///
+  /// already contains lunch, so nothing is added.
+  ///
+  /// But:
+  ///
+  /// 9:30 AM -> 1:00 PM
+  /// 2:00 PM -> 6:30 PM
+  ///
+  /// has a one-hour lunch gap, so one hour is credited.
   static AttendanceResult calculateFromSessions(
     List<AttendanceSession> sessions, {
     bool workFromHome = false,
   }) {
-    if (sessions.isEmpty) return AttendanceResult(dayType: DayType.absent, netHours: 0, label: 'Absent');
+    // -------------------------------------------------------------------------
+    // NO ATTENDANCE
+    // -------------------------------------------------------------------------
 
-    final firstIn = toMinutes(sessions.first.punchIn);
-    if (firstIn == null) return AttendanceResult(dayType: DayType.absent, netHours: 0, label: 'Absent');
-
-    // If the last session is still open, the day isn't classifiable yet —
-    // it's still in progress.
-    if (sessions.last.punchOut == null) {
-      return AttendanceResult(dayType: DayType.notMarked, netHours: 0, label: 'Checked In');
+    if (sessions.isEmpty) {
+      return AttendanceResult(
+        dayType: DayType.absent,
+        netHours: 0,
+        label: 'Absent',
+      );
     }
 
-    int totalMinutes = 0;
-    int lunchCoveredMinutes = 0;
-    int? overallOut;
+    final validIntervals =
+        <_TimeInterval>[];
+
+    // -------------------------------------------------------------------------
+    // BUILD VALID INTERVALS
+    // -------------------------------------------------------------------------
 
     for (final session in sessions) {
-      final inM = toMinutes(session.punchIn);
-      final outM = toMinutes(session.punchOut);
-      if (inM == null || outM == null || outM < inM) continue;
-      totalMinutes += (outM - inM);
-      overallOut = overallOut == null ? outM : (outM > overallOut ? outM : overallOut);
+      final inMinutes =
+          toMinutes(session.punchIn);
 
-      final overlapStart = inM > lunchStart ? inM : lunchStart;
-      final overlapEnd = outM < lunchEnd ? outM : lunchEnd;
-      if (overlapEnd > overlapStart) {
-        lunchCoveredMinutes += (overlapEnd - overlapStart);
+      final outMinutes =
+          toMinutes(session.punchOut);
+
+      // Invalid punch-in.
+      if (inMinutes == null) {
+        continue;
+      }
+
+      // Open session.
+      //
+      // The calculator does NOT convert this into MIS-PUNCH.
+      // MIS-PUNCH is handled by the attendance workflow.
+      if (outMinutes == null) {
+        return AttendanceResult(
+          dayType: DayType.absent,
+          netHours: 0,
+          label: 'Absent',
+        );
+      }
+
+      // Ignore invalid time ranges.
+      if (outMinutes < inMinutes) {
+        continue;
+      }
+
+      // Zero-minute sessions are not useful attendance.
+      if (outMinutes == inMinutes) {
+        continue;
+      }
+
+      validIntervals.add(
+        _TimeInterval(
+          start: inMinutes,
+          end: outMinutes,
+        ),
+      );
+    }
+
+    // No valid completed sessions.
+    if (validIntervals.isEmpty) {
+      return AttendanceResult(
+        dayType: DayType.absent,
+        netHours: 0,
+        label: 'Absent',
+      );
+    }
+
+    // -------------------------------------------------------------------------
+    // SORT SESSIONS
+    // -------------------------------------------------------------------------
+
+    validIntervals.sort(
+      (a, b) => a.start.compareTo(
+        b.start,
+      ),
+    );
+
+    // -------------------------------------------------------------------------
+    // RAW SESSION MINUTES
+    // -------------------------------------------------------------------------
+
+    int totalMinutes = 0;
+
+    for (final interval in validIntervals) {
+      totalMinutes +=
+          interval.end - interval.start;
+    }
+
+    // -------------------------------------------------------------------------
+    // LUNCH CREDIT
+    // -------------------------------------------------------------------------
+    //
+    // Lunch is working time.
+    //
+    // We credit only the portion of lunch that lies between the first
+    // punch-in and the last punch-out and is NOT already covered by
+    // a session.
+    // -------------------------------------------------------------------------
+
+    final firstStart =
+        validIntervals.first.start;
+
+    final lastEnd =
+        validIntervals.last.end;
+
+    final attendanceSpansLunch =
+        firstStart < lunchEnd &&
+        lastEnd > lunchStart;
+
+    if (attendanceSpansLunch) {
+      final lunchCreditStart =
+          lunchStart > firstStart
+              ? lunchStart
+              : firstStart;
+
+      final lunchCreditEnd =
+          lunchEnd < lastEnd
+              ? lunchEnd
+              : lastEnd;
+
+      if (lunchCreditEnd >
+          lunchCreditStart) {
+        final lunchCoveredBySessions =
+            _calculateCoveredMinutes(
+          validIntervals,
+          lunchCreditStart,
+          lunchCreditEnd,
+        );
+
+        final lunchWindowMinutes =
+            lunchCreditEnd -
+                lunchCreditStart;
+
+        final missingLunchMinutes =
+            lunchWindowMinutes -
+                lunchCoveredBySessions;
+
+        if (missingLunchMinutes > 0) {
+          totalMinutes +=
+              missingLunchMinutes;
+        }
       }
     }
 
-    // Credit any lunch minutes not already covered by a session, but only if
-    // lunch actually falls within the employee's day (first punch-in to
-    // last punch-out) — so arriving after lunch or leaving before it doesn't
-    // get credited for lunch they weren't there for.
-    if (overallOut != null && firstIn <= lunchStart && overallOut! >= lunchEnd) {
-      final uncovered = (lunchEnd - lunchStart) - lunchCoveredMinutes;
-      if (uncovered > 0) totalMinutes += uncovered;
-    }
+    // -------------------------------------------------------------------------
+    // FINAL HOURS
+    // -------------------------------------------------------------------------
 
-    final netHours = totalMinutes / 60.0;
+    final netHours =
+        totalMinutes / 60.0;
 
-    if (workFromHome) {
-      return AttendanceResult(dayType: DayType.fullDay, netHours: netHours, label: 'Full Day (WFH)');
-    }
+    final requiredHours =
+        requiredMinutes / 60.0;
 
-    final difference = netHours - requiredMinutes / 60.0;
+    final difference =
+        netHours - requiredHours;
+
+    // -------------------------------------------------------------------------
+    // FULL DAY
+    // -------------------------------------------------------------------------
+
     if (difference >= 0) {
-      return AttendanceResult(dayType: DayType.fullDay, netHours: netHours, extraHours: difference, label: 'Full Day Present');
+      return AttendanceResult(
+        dayType: DayType.fullDay,
+        netHours: netHours,
+        extraHours: difference,
+        shortfallHours: 0,
+        label: workFromHome
+            ? 'Full Day (WFH)'
+            : 'Full Day',
+      );
     }
-    return AttendanceResult(dayType: DayType.misPunch, netHours: netHours, shortfallHours: -difference, label: 'Mis-punch');
+
+    // -------------------------------------------------------------------------
+    // WORK-PENDING
+    // -------------------------------------------------------------------------
+
+    return AttendanceResult(
+      dayType: DayType.workPending,
+      netHours: netHours,
+      shortfallHours: -difference,
+      extraHours: 0,
+      label: workFromHome
+          ? 'Work-Pending (WFH)'
+          : 'Work-Pending',
+    );
   }
 
-  static String formatHours(double hours) {
-    final totalMinutes = (hours * 60).round();
-    return '${totalMinutes ~/ 60} hr ${totalMinutes % 60} min';
+  // ===========================================================================
+  // LUNCH COVERAGE
+  // ===========================================================================
+
+  /// Returns how many minutes inside [rangeStart, rangeEnd] are already
+  /// covered by attendance sessions.
+  ///
+  /// This prevents double-counting lunch.
+  static int _calculateCoveredMinutes(
+    List<_TimeInterval> intervals,
+    int rangeStart,
+    int rangeEnd,
+  ) {
+    int covered = 0;
+
+    for (final interval in intervals) {
+      final start =
+          interval.start > rangeStart
+              ? interval.start
+              : rangeStart;
+
+      final end =
+          interval.end < rangeEnd
+              ? interval.end
+              : rangeEnd;
+
+      if (end > start) {
+        covered += end - start;
+      }
+    }
+
+    return covered;
   }
+
+  // ===========================================================================
+  // EXTRA HOURS
+  // ===========================================================================
+
+  static double calculateExtraHours(
+    double workedHours,
+  ) {
+    final extra =
+        workedHours -
+            (requiredMinutes / 60.0);
+
+    return extra > 0
+        ? extra
+        : 0;
+  }
+
+  // ===========================================================================
+  // SHORTFALL
+  // ===========================================================================
+
+  static double calculateShortfallHours(
+    double workedHours,
+  ) {
+    final shortfall =
+        (requiredMinutes / 60.0) -
+            workedHours;
+
+    return shortfall > 0
+        ? shortfall
+        : 0;
+  }
+
+  // ===========================================================================
+  // FORMAT HOURS
+  // ===========================================================================
+
+  static String formatHours(
+    double hours,
+  ) {
+    final totalMinutes =
+        (hours * 60).round();
+
+    final hoursPart =
+        totalMinutes ~/ 60;
+
+    final minutesPart =
+        totalMinutes % 60;
+
+    return '$hoursPart hr $minutesPart min';
+  }
+}
+
+// =============================================================================
+// INTERNAL TIME INTERVAL
+// =============================================================================
+
+class _TimeInterval {
+  final int start;
+  final int end;
+
+  const _TimeInterval({
+    required this.start,
+    required this.end,
+  });
 }

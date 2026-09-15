@@ -9,6 +9,7 @@ import '../utils/app_colors.dart';
 import '../utils/app_constants.dart';
 import '../utils/session_manager.dart';
 import 'admin_shell.dart';
+import 'employee_shell.dart';
 import 'change_password_screen.dart';
 import 'language_screen.dart';
 import 'login_screens.dart';
@@ -22,7 +23,15 @@ import 'notification_settings_screen.dart';
 class AccountSettingsScreen extends StatefulWidget {
   final String employeeId;
 
-  const AccountSettingsScreen({super.key, required this.employeeId});
+  /// True when this screen was opened from the Admin Dashboard.
+  /// In that mode an admin should see "Switch to My Employee Dashboard".
+  final bool isAdminPanel;
+
+  const AccountSettingsScreen({
+    super.key,
+    required this.employeeId,
+    this.isAdminPanel = false,
+  });
 
   @override
   State<AccountSettingsScreen> createState() => _AccountSettingsScreenState();
@@ -122,6 +131,18 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
         ),
       ),
       (route) => false,
+    );
+  }
+
+  void _switchToMyEmployeeDashboard() {
+    if (isSuperAdmin) return;
+
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (_) => EmployeeShell(
+          employeeId: widget.employeeId,
+        ),
+      ),
     );
   }
 
@@ -237,17 +258,19 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
                     }),
                     _tile(Icons.language, "Language — $selectedLanguage", _changeLanguage),
                   ]),
-                  if (hasAdminAccess) ...[
+                  if (hasAdminAccess && !isSuperAdmin) ...[
                     const SizedBox(height: 10),
-                    _section(isSuperAdmin ? "Super Admin" : "Admin", [
+                    _section("Admin", [
                       _tile(
-                        isSuperAdmin
-                            ? Icons.shield_outlined
+                        widget.isAdminPanel
+                            ? Icons.dashboard_outlined
                             : Icons.admin_panel_settings_outlined,
-                        isSuperAdmin
-                            ? "Switch to Super Admin Panel"
+                        widget.isAdminPanel
+                            ? "Switch to My Employee Dashboard"
                             : "Switch to Admin Panel",
-                        _switchToAdminPanel,
+                        widget.isAdminPanel
+                            ? _switchToMyEmployeeDashboard
+                            : _switchToAdminPanel,
                       ),
                     ]),
                   ],

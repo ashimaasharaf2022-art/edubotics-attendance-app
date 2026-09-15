@@ -10,6 +10,7 @@ import 'admin_leave_screen.dart';
 import 'announcement_detail_screen.dart';
 import 'account_settings_screen.dart';
 import 'admin_activity_log_screen.dart';
+import 'admin_compensation_requests_screen.dart';
 import 'manage_admins_screen.dart';
 import '../utils/attachment_upload.dart';
 
@@ -32,11 +33,17 @@ class AdminDashboard extends StatefulWidget {
 class _AdminDashboardState extends State<AdminDashboard> {
   late DatabaseReference dbRef;
 
+  Map<dynamic, dynamic>? _asMap(dynamic value) {
+    if (value is Map) return Map<dynamic, dynamic>.from(value);
+    return null;
+  }
+
   bool loading = true;
   int totalEmployees = 0;
   int checkedInToday = 0;
   int pendingApprovals = 0;
   int pendingPayslips = 0;
+  int pendingCompensation = 0;
 
   @override
   void initState() {
@@ -67,7 +74,8 @@ class _AdminDashboardState extends State<AdminDashboard> {
   }
 
   bool _isSuperAdminRole(dynamic userData) {
-    final data = Map<dynamic, dynamic>.from(userData as Map);
+    final data = _asMap(userData);
+    if (data == null) return false;
     return data["role"]?.toString().toLowerCase() == "superadmin";
   }
 
@@ -76,64 +84,83 @@ class _AdminDashboardState extends State<AdminDashboard> {
   /// pending auto-checkout punch requests) and pendingPayslips.
   Future<void> _loadPendingApprovals() async {
     int otherCount = 0;
+    int compensationCount = 0;
+
     final deviceSnap = await dbRef.child("DeviceApprovalRequests").get();
-    if (deviceSnap.exists) {
-      final empMap = Map<dynamic, dynamic>.from(deviceSnap.value as Map);
-      empMap.forEach((_, requestsMap) {
-        final requests = Map<dynamic, dynamic>.from(requestsMap as Map);
-        requests.forEach((_, v) {
-          final req = Map<dynamic, dynamic>.from(v as Map);
-          if (req["status"] == "pending" || req["status"] == "otp_ready") otherCount++;
-        });
+    final deviceMap = _asMap(deviceSnap.value);
+    deviceMap?.forEach((_, requestsMap) {
+      final requests = _asMap(requestsMap);
+      requests?.forEach((_, v) {
+        final req = _asMap(v);
+        final status = req?["status"]?.toString().toLowerCase();
+        if (status == "pending" || status == "otp_ready") otherCount++;
       });
-    }
+    });
+
     final wfhSnap = await dbRef.child("WorkFromHomeRequests").get();
-    if (wfhSnap.exists) {
-      final empMap = Map<dynamic, dynamic>.from(wfhSnap.value as Map);
-      empMap.forEach((_, datesMap) {
-        final dates = Map<dynamic, dynamic>.from(datesMap as Map);
-        dates.forEach((_, v) {
-          final req = Map<dynamic, dynamic>.from(v as Map);
-          if (req["status"] == "pending") otherCount++;
-        });
+    final wfhMap = _asMap(wfhSnap.value);
+    wfhMap?.forEach((_, datesMap) {
+      final dates = _asMap(datesMap);
+      dates?.forEach((_, v) {
+        final req = _asMap(v);
+        if (req?["status"]?.toString().toLowerCase() == "pending") {
+          otherCount++;
+        }
       });
-    }
+    });
+
     final msgSnap = await dbRef.child("AdminMessages").get();
-    if (msgSnap.exists) {
-      final msgs = Map<dynamic, dynamic>.from(msgSnap.value as Map);
-      msgs.forEach((_, v) {
-        final req = Map<dynamic, dynamic>.from(v as Map);
-        if (req["status"] != "resolved") otherCount++;
-      });
-    }
+    final msgMap = _asMap(msgSnap.value);
+    msgMap?.forEach((_, v) {
+      final req = _asMap(v);
+      if (req?["status"]?.toString().toLowerCase() != "resolved") {
+        otherCount++;
+      }
+    });
+
     final punchSnap = await dbRef.child('PunchRequests').get();
-    if (punchSnap.exists) {
-      final employees = Map<dynamic, dynamic>.from(punchSnap.value as Map);
-      employees.forEach((_, datesMap) {
-        final dates = Map<dynamic, dynamic>.from(datesMap as Map);
-        dates.forEach((_, value) {
-          final request = Map<dynamic, dynamic>.from(value as Map);
-          if (request['status'] == 'pending' && request['type'] == 'auto_checkout') otherCount++;
-        });
+    final punchMap = _asMap(punchSnap.value);
+    punchMap?.forEach((_, datesMap) {
+      final dates = _asMap(datesMap);
+      dates?.forEach((_, value) {
+        final request = _asMap(value);
+        if (request?['status']?.toString().toLowerCase() == 'pending' &&
+            request?['type']?.toString().toLowerCase() == 'mis_punch') {
+          otherCount++;
+        }
       });
-    }
+    });
+
+    final compensationSnap = await dbRef.child('CompensationRequests').get();
+    final compensationMap = _asMap(compensationSnap.value);
+    compensationMap?.forEach((_, requestsMap) {
+      final requests = _asMap(requestsMap);
+      requests?.forEach((_, value) {
+        final request = _asMap(value);
+        if (request?['status']?.toString().toLowerCase() == 'pending') {
+          compensationCount++;
+        }
+      });
+    });
 
     int payslipCount = 0;
     final paySnap = await dbRef.child("PayslipRequests").get();
-    if (paySnap.exists) {
-      final empMap = Map<dynamic, dynamic>.from(paySnap.value as Map);
-      empMap.forEach((_, requestsMap) {
-        final requests = Map<dynamic, dynamic>.from(requestsMap as Map);
-        requests.forEach((_, v) {
-          final req = Map<dynamic, dynamic>.from(v as Map);
-          if (req["status"] == "pending") payslipCount++;
-        });
+    final payMap = _asMap(paySnap.value);
+    payMap?.forEach((_, requestsMap) {
+      final requests = _asMap(requestsMap);
+      requests?.forEach((_, v) {
+        final req = _asMap(v);
+        if (req?["status"]?.toString().toLowerCase() == "pending") {
+          payslipCount++;
+        }
       });
-    }
+    });
+
     if (!mounted) return;
     setState(() {
       pendingApprovals = otherCount;
       pendingPayslips = payslipCount;
+      pendingCompensation = compensationCount;
     });
   }
 
@@ -145,28 +172,26 @@ class _AdminDashboardState extends State<AdminDashboard> {
 
       int employeeCount = 0;
       final validEmployeeIds = <String>{};
-      if (usersSnap.exists) {
-        final usersMap = Map<dynamic, dynamic>.from(usersSnap.value as Map);
-        usersMap.forEach((id, data) {
-          // Super Admin is not an employee — exclude from all counts.
-          if (_isSuperAdminRole(data)) return;
-          employeeCount++;
-          validEmployeeIds.add(id.toString());
-        });
-      }
+      final usersMap = _asMap(usersSnap.value);
+      usersMap?.forEach((id, data) {
+        // Super Admin is not an employee — exclude from all counts.
+        if (_isSuperAdminRole(data)) return;
+        employeeCount++;
+        validEmployeeIds.add(id.toString());
+      });
 
       int checkedIn = 0;
-      if (attendanceSnap.exists) {
+      final attendanceMap = _asMap(attendanceSnap.value);
+      if (attendanceMap != null) {
         final today = _todayKey();
-        final data = Map<dynamic, dynamic>.from(attendanceSnap.value as Map);
-        data.forEach((_, v) {
-          final days = Map<dynamic, dynamic>.from(v as Map);
-          if (days.containsKey(today)) {
-            final todayRecord = Map<dynamic, dynamic>.from(days[today] as Map);
-            final status = todayRecord["status"]?.toString() ?? "";
-            if (status == "Checked In" || status == "Checked Out") {
-              checkedIn++;
-            }
+        attendanceMap.forEach((_, v) {
+          final days = _asMap(v);
+          if (days == null || !days.containsKey(today)) return;
+          final todayRecord = _asMap(days[today]);
+          if (todayRecord == null) return;
+          final status = todayRecord["status"]?.toString() ?? "";
+          if (status == "Checked In" || status == "Checked Out") {
+            checkedIn++;
           }
         });
       }
@@ -515,6 +540,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                     MaterialPageRoute(
                       builder: (_) => AccountSettingsScreen(
                         employeeId: widget.employeeId,
+                        isAdminPanel: true,
                       ),
                     ),
                   );
@@ -638,15 +664,35 @@ class _AdminDashboardState extends State<AdminDashboard> {
               const SizedBox(width: 12),
               Expanded(
                 child: _quickActionCard(
-                  Icons.campaign_outlined,
-                  "Publish Announcements",
-                  "Create and publish updates",
-                  AppColors.primary,
-                  _publishAnnouncement,
+                  Icons.schedule_send_rounded,
+                  "Compensation Requests",
+                  "Review Work-Pending plans",
+                  AppColors.warning,
+                  () async {
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => AdminCompensationRequestsScreen(
+                          adminId: widget.employeeId,
+                          adminName: widget.employeeName ?? widget.employeeId,
+                        ),
+                      ),
+                    );
+                    _loadPendingApprovals();
+                  },
+                  badge: pendingCompensation > 0 ? "$pendingCompensation" : null,
                 ),
               ),
             ],
           ),
+        ),
+        const SizedBox(height: 12),
+        _quickActionCard(
+          Icons.campaign_outlined,
+          "Publish Announcements",
+          "Create and publish updates",
+          AppColors.primary,
+          _publishAnnouncement,
         ),
         if (widget.isSuperAdmin) ...[
           const SizedBox(height: 12),

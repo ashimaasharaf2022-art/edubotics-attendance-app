@@ -104,6 +104,15 @@ class _PersonalReportScreenState extends State<PersonalReportScreen> {
 
   DayType _classify(String key) {
     final record = attendance[key];
+
+    // MIS-PUNCH is a temporary workflow state. Do not treat the 11:59 PM
+    // placeholder as a real punch-out or calculate working hours from it.
+    if (record?['status'] == 'MIS-PUNCH' ||
+        record?['status'] == 'Auto Checkout Pending' ||
+        record?['autoPunchOut'] == true) {
+      return DayType.absent;
+    }
+
     final sessions = _sessionsFromRecord(record);
     if (sessions.isEmpty) return DayType.absent;
 
@@ -131,7 +140,7 @@ class _PersonalReportScreenState extends State<PersonalReportScreen> {
     final weekDates = _weekDates();
     final labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-    int fullDays = 0, misDays = 0, absentDays = 0;
+    int fullDays = 0, workPendingDays = 0, absentDays = 0;
     double totalHours = 0;
     final bars = <BarChartGroupData>[];
 
@@ -142,9 +151,18 @@ class _PersonalReportScreenState extends State<PersonalReportScreen> {
 
       if (!weekDates[i].isAfter(DateTime.now())) {
         final type = _classify(key);
-        if (type == DayType.fullDay) fullDays++;
-        else if (type == DayType.misPunch) misDays++;
-        else if (type == DayType.absent) absentDays++;
+        if (attendance[key]?['status'] == 'MIS-PUNCH' ||
+            attendance[key]?['status'] == 'Auto Checkout Pending' ||
+            attendance[key]?['autoPunchOut'] == true) {
+          // Temporary MIS-PUNCH is not one of the three classifications.
+          // It remains visible through the attendance status elsewhere.
+        } else if (type == DayType.fullDay) {
+          fullDays++;
+        } else if (type == DayType.workPending) {
+          workPendingDays++;
+        } else if (type == DayType.absent) {
+          absentDays++;
+        }
       }
 
       bars.add(BarChartGroupData(x: i, barRods: [
@@ -282,7 +300,7 @@ class _PersonalReportScreenState extends State<PersonalReportScreen> {
                       children: [
                         Expanded(child: _statCard("Full", "$fullDays", AppColors.success, AppColors.successLight)),
                         const SizedBox(width: 10),
-                        Expanded(child: _statCard("Miss", "$misDays", AppColors.danger, AppColors.dangerLight)),
+                        Expanded(child: _statCard("Work-Pending", "$workPendingDays", AppColors.warning, AppColors.warningLight)),
                         const SizedBox(width: 10),
                         Expanded(child: _statCard("Absent", "$absentDays", AppColors.danger, AppColors.dangerLight)),
                       ],

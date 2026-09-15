@@ -1,9 +1,22 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_database/firebase_database.dart';
-import '../utils/app_colors.dart';
-import '../utils/activity_logger.dart';
 
+import '../utils/app_colors.dart';
+
+/// CEO-only screen for granting/revoking Admin Panel access.
+///
+/// Super Admin accounts are never included in this list.
+///
+/// Grant Admin:
+///   adminAccess: true
+///   role: "admin"
+///
+/// Remove Admin:
+///   adminAccess: false
+///   role: "employee"
+///
+/// This screen can NEVER grant Super Admin access.
 class ManageAdminsScreen extends StatefulWidget {
   final String superAdminId;
   final String superAdminName;
@@ -15,179 +28,504 @@ class ManageAdminsScreen extends StatefulWidget {
   });
 
   @override
-  State<ManageAdminsScreen> createState() => _ManageAdminsScreenState();
+  State<ManageAdminsScreen> createState() =>
+      _ManageAdminsScreenState();
 }
 
-class _ManageAdminsScreenState extends State<ManageAdminsScreen> {
-  late DatabaseReference dbRef;
-  String searchQuery = "";
+class _ManageAdminsScreenState
+    extends State<ManageAdminsScreen> {
+  late final DatabaseReference dbRef;
+
+  bool loading = true;
+
+  String? savingEmployeeId;
+
+  final employees = <_EmployeeAccess>[];
 
   @override
   void initState() {
     super.initState();
+
     dbRef = FirebaseDatabase.instanceFor(
       app: Firebase.app(),
-      databaseURL: "https://edubotics-attendance-default-rtdb.asia-southeast1.firebasedatabase.app",
+      databaseURL:
+          'https://edubotics-attendance-default-rtdb.asia-southeast1.firebasedatabase.app',
     ).ref();
+
+    _load();
   }
 
-  Future<void> _toggleAdminAccess(String employeeId, String name, bool newValue) async {
-    await dbRef.child("users").child(employeeId).update({"adminAccess": newValue});
+  // ============================================================
+  // LOAD EMPLOYEES
+  // ============================================================
 
-    await ActivityLogger.log(
-      adminId: widget.superAdminId,
-      adminName: widget.superAdminName,
-      action: newValue ? "Granted Admin Access" : "Revoked Admin Access",
-      details: "$name ($employeeId)",
+  Future<void> _load() async {
+    if (mounted) {
+      setState(() {
+        loading = true;
+      });
+    }
+
+    try {
+      final snap = await dbRef
+          .child('users')
+          .get();
+
+      employees.clear();
+
+      if (snap.exists && snap.value is Map) {
+        final users =
+            Map<dynamic, dynamic>.from(
+          snap.value as Map,
+        );
+
+        for (final entry in users.entries) {
+          if (entry.value is! Map) {
+            continue;
+          }
+
+          final data =
+              Map<dynamic, dynamic>.from(
+            entry.value as Map,
+          );
+
+          final keyId =
+              entry.key.toString();
+
+          final storedId =
+              data['employeeId']
+                  ?.toString()
+                  .trim();
+
+          final employeeId =
+              storedId == null ||
+                      storedId.isEmpty
+                  ? keyId
+                  : storedId;
+
+          final role =
+              data['role']
+                      ?.toString()
+                      .trim()
+                      .toLowerCase() ??
+                  'employee';
+
+          // ----------------------------------------------------
+          // NEVER SHOW SUPER ADMIN / CEO
+          // ----------------------------------------------------
+
+          if (role == 'superadmin') {
+            continue;
+          }
+
+          // ----------------------------------------------------
+          // ADMIN ACCESS
+          // ----------------------------------------------------
+
+          final adminAccess =
+              data['adminAccess'] == true ||
+              role == 'admin';
+
+          // ----------------------------------------------------
+          // ACCOUNT STATUS
+          // ----------------------------------------------------
+
+          final status =
+              data['status']
+                      ?.toString()
+                      .trim()
+                      .toLowerCase() ??
+                  'active';
+
+          final active =
+              status != 'inactive';
+
+          final rawName =
+              data['name']
+                      ?.toString()
+                      .trim() ??
+                  '';
+
+          final name =
+              rawName.isEmpty
+                  ? employeeId
+                  : rawName;
+
+          final designation =
+              data['designation']
+                      ?.toString()
+                      .trim() ??
+                  '';
+
+          employees.add(
+            _EmployeeAccess(
+              employeeId: employeeId,
+              name: name,
+              designation: designation,
+              adminAccess: adminAccess,
+              active: active,
+            ),
+          );
+        }
+      }
+
+      // --------------------------------------------------------
+      // SORT BY EMPLOYEE ID
+      // --------------------------------------------------------
+
+      employees.sort(
+        (a, b) => a.employeeId.compareTo(
+          b.employeeId,
+        ),
+      );
+
+      if (!mounted) return;
+
+      setState(() {
+        loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        loading = false;
+      });
+
+      _message(
+        'Could not load employees: $e',
+      );
+    }
+  }
+
+  // ============================================================
+  // TOGGLE ADMIN ACCESS
+  // ============================================================
+
+  Future<void> _toggle(
+    _EmployeeAccess employee,
+    bool value,
+  ) async {
+    if (savingEmployeeId != null) {
+      return;
+    }
+
+    setState(() {
+      savingEmployeeId =
+          employee.employeeId;
+    });
+
+    try {
+      final employeeRef = dbRef
+          .child('users')
+          .child(employee.employeeId);
+
+      // --------------------------------------------------------
+      // GRANT ADMIN ACCESS
+      // --------------------------------------------------------
+
+      if (value) {
+        await employeeRef.update({
+          'adminAccess': true,
+          'role': 'admin',
+        });
+      }
+
+      // --------------------------------------------------------
+      // REMOVE ADMIN ACCESS
+      // --------------------------------------------------------
+
+      else {
+        await employeeRef.update({
+          'adminAccess': false,
+          'role': 'employee',
+        });
+      }
+
+      employee.adminAccess = value;
+
+      if (!mounted) return;
+
+      setState(() {
+        savingEmployeeId = null;
+      });
+
+      if (value) {
+        _message(
+          '${employee.name} can access the Admin Panel now.',
+        );
+      } else {
+        _message(
+          '${employee.name} no longer has Admin Panel access.',
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        savingEmployeeId = null;
+      });
+
+      _message(
+        'Could not change admin access: $e',
+      );
+    }
+  }
+
+  // ============================================================
+  // MESSAGE
+  // ============================================================
+
+  void _message(String text) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(text),
+      ),
     );
   }
 
-  Future<void> _confirmToggle(String employeeId, String name, bool newValue) async {
-    if (!newValue) {
-      // Revoking is destructive to their current admin session, confirm first.
-      final confirm = await showDialog<bool>(
-        context: context,
-        builder: (_) => AlertDialog(
-          title: const Text("Revoke Admin Access"),
-          content: Text("$name will no longer be able to switch into the Admin Panel."),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text("Cancel")),
-            TextButton(
-              onPressed: () => Navigator.pop(context, true),
-              style: TextButton.styleFrom(foregroundColor: AppColors.danger),
-              child: const Text("Revoke"),
-            ),
-          ],
-        ),
-      );
-      if (confirm != true) return;
-    }
-
-    await _toggleAdminAccess(employeeId, name, newValue);
-  }
+  // ============================================================
+  // BUILD
+  // ============================================================
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.background,
       appBar: AppBar(
-        backgroundColor: AppColors.primary,
-        title: const Text("Grant Admin Access", style: TextStyle(color: Colors.white)),
+        title: const Text(
+          'Manage Admin Access',
+        ),
       ),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: TextField(
-              decoration: InputDecoration(
-                hintText: "Search employee by name or ID",
-                prefixIcon: const Icon(Icons.search),
-                filled: true,
-                fillColor: AppColors.surface,
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
-              ),
-              onChanged: (v) => setState(() => searchQuery = v.trim().toLowerCase()),
-            ),
-          ),
-          Expanded(
-            child: StreamBuilder<DatabaseEvent>(
-              stream: dbRef.child("users").onValue,
-              builder: (context, snapshot) {
-                if (!snapshot.hasData || snapshot.data!.snapshot.value == null) {
-                  return const Center(child: CircularProgressIndicator());
-                }
 
-                final data = Map<dynamic, dynamic>.from(snapshot.data!.snapshot.value as Map);
-                final employees = <MapEntry<String, Map<dynamic, dynamic>>>[];
+      body: loading
+          ? const Center(
+              child: CircularProgressIndicator(),
+            )
+          : RefreshIndicator(
+              onRefresh: _load,
 
-                data.forEach((id, value) {
-                  final user = Map<dynamic, dynamic>.from(value as Map);
-                  final role = user["role"]?.toString().toLowerCase();
-                  // Only real employee accounts can be granted admin
-                  // access \u2014 super admin itself is a separate fixed role.
-                  if (role != "employee") return;
-
-                  final name = (user["name"]?.toString() ?? "").toLowerCase();
-                  final idLower = id.toString().toLowerCase();
-                  if (searchQuery.isNotEmpty &&
-                      !name.contains(searchQuery) &&
-                      !idLower.contains(searchQuery)) {
-                    return;
-                  }
-
-                  employees.add(MapEntry(id.toString(), user));
-                });
-
-                employees.sort((a, b) =>
-                    (a.value["name"]?.toString() ?? a.key).compareTo(b.value["name"]?.toString() ?? b.key));
-
-                if (employees.isEmpty) {
-                  return const Center(child: Text("No matching employees"));
-                }
-
-                return ListView.builder(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  itemCount: employees.length,
-                  itemBuilder: (context, index) {
-                    final id = employees[index].key;
-                    final user = employees[index].value;
-                    final name = user["name"]?.toString() ?? id;
-                    final department = user["department"]?.toString();
-                    final hasAccess = user["adminAccess"] == true;
-
-                    return Container(
-                      margin: const EdgeInsets.only(bottom: 10),
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: AppColors.surface,
-                        borderRadius: BorderRadius.circular(14),
-                        boxShadow: AppShadows.card,
-                        border: hasAccess ? Border.all(color: AppColors.success.withOpacity(0.4)) : null,
-                      ),
-                      child: Row(
-                        children: [
-                          CircleAvatar(
-                            backgroundColor: (hasAccess ? AppColors.success : AppColors.primary).withOpacity(0.15),
-                            child: Icon(
-                              hasAccess ? Icons.admin_panel_settings : Icons.person,
-                              color: hasAccess ? AppColors.success : AppColors.primary,
-                            ),
+              child: employees.isEmpty
+                  ? ListView(
+                      physics:
+                          const AlwaysScrollableScrollPhysics(),
+                      children: const [
+                        SizedBox(height: 160),
+                        Center(
+                          child: Text(
+                            'No employee accounts found.',
                           ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(name, style: const TextStyle(fontWeight: FontWeight.bold)),
-                                Text(id, style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
-                                if (department != null && department.isNotEmpty)
-                                  Text(department, style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
-                                if (hasAccess)
-                                  const Padding(
-                                    padding: EdgeInsets.only(top: 2),
-                                    child: Text(
-                                      "Has Admin Access",
-                                      style: TextStyle(color: AppColors.success, fontSize: 11, fontWeight: FontWeight.bold),
-                                    ),
+                        ),
+                      ],
+                    )
+                  : ListView.separated(
+                      physics:
+                          const AlwaysScrollableScrollPhysics(),
+                      padding:
+                          const EdgeInsets.all(16),
+                      itemCount:
+                          employees.length,
+
+                      separatorBuilder:
+                          (_, __) =>
+                              const SizedBox(
+                        height: 10,
+                      ),
+
+                      itemBuilder:
+                          (_, index) {
+                        final employee =
+                            employees[index];
+
+                        final busy =
+                            savingEmployeeId ==
+                                employee.employeeId;
+
+                        return Container(
+                          padding:
+                              const EdgeInsets.all(16),
+
+                          decoration:
+                              BoxDecoration(
+                            color:
+                                AppColors.surface,
+                            borderRadius:
+                                BorderRadius.circular(
+                              16,
+                            ),
+                            boxShadow:
+                                AppShadows.card,
+                          ),
+
+                          child: Row(
+                            children: [
+                              // --------------------------------
+                              // AVATAR
+                              // --------------------------------
+
+                              CircleAvatar(
+                                backgroundColor:
+                                    AppColors
+                                        .primary
+                                        .withOpacity(
+                                  .10,
+                                ),
+
+                                child: Text(
+                                  employee.name
+                                          .isEmpty
+                                      ? '?'
+                                      : employee
+                                          .name[0]
+                                          .toUpperCase(),
+
+                                  style:
+                                      const TextStyle(
+                                    color:
+                                        AppColors
+                                            .primary,
+                                    fontWeight:
+                                        FontWeight
+                                            .bold,
                                   ),
-                              ],
-                            ),
+                                ),
+                              ),
+
+                              const SizedBox(
+                                width: 12,
+                              ),
+
+                              // --------------------------------
+                              // EMPLOYEE DETAILS
+                              // --------------------------------
+
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment
+                                          .start,
+                                  children: [
+                                    Text(
+                                      employee.name,
+
+                                      style:
+                                          const TextStyle(
+                                        fontWeight:
+                                            FontWeight
+                                                .w800,
+                                      ),
+                                    ),
+
+                                    const SizedBox(
+                                      height: 3,
+                                    ),
+
+                                    Text(
+                                      employee
+                                              .designation
+                                              .isEmpty
+                                          ? employee
+                                              .employeeId
+                                          : '${employee.employeeId} • ${employee.designation}',
+
+                                      style:
+                                          const TextStyle(
+                                        color:
+                                            AppColors
+                                                .textSecondary,
+                                        fontSize: 12,
+                                      ),
+                                    ),
+
+                                    const SizedBox(
+                                      height: 5,
+                                    ),
+
+                                    Text(
+                                      employee
+                                              .adminAccess
+                                          ? 'Admin Panel access enabled'
+                                          : 'Employee access only',
+
+                                      style:
+                                          TextStyle(
+                                        color: employee
+                                                .adminAccess
+                                            ? AppColors
+                                                .primary
+                                            : AppColors
+                                                .textSecondary,
+                                        fontSize: 11,
+                                        fontWeight:
+                                            FontWeight
+                                                .w600,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+
+                              const SizedBox(
+                                width: 8,
+                              ),
+
+                              // --------------------------------
+                              // SWITCH / LOADING
+                              // --------------------------------
+
+                              if (busy)
+                                const SizedBox(
+                                  width: 24,
+                                  height: 24,
+
+                                  child:
+                                      CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              else
+                                Switch(
+                                  value:
+                                      employee
+                                          .adminAccess,
+
+                                  onChanged:
+                                      employee.active
+                                          ? (value) =>
+                                              _toggle(
+                                                employee,
+                                                value,
+                                              )
+                                          : null,
+                                ),
+                            ],
                           ),
-                          Switch(
-                            value: hasAccess,
-                            activeColor: AppColors.success,
-                            onChanged: (value) => _confirmToggle(id, name, value),
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                );
-              },
+                        );
+                      },
+                    ),
             ),
-          ),
-        ],
-      ),
     );
   }
+}
+
+// ================================================================
+// EMPLOYEE ACCESS MODEL
+// ================================================================
+
+class _EmployeeAccess {
+  final String employeeId;
+  final String name;
+  final String designation;
+
+  bool adminAccess;
+
+  final bool active;
+
+  _EmployeeAccess({
+    required this.employeeId,
+    required this.name,
+    required this.designation,
+    required this.adminAccess,
+    required this.active,
+  });
 }

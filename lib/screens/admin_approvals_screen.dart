@@ -23,19 +23,109 @@ class AdminApprovalsScreen extends StatefulWidget {
   State<AdminApprovalsScreen> createState() => _AdminApprovalsScreenState();
 }
 
-class _AdminApprovalsScreenState extends State<AdminApprovalsScreen> with SingleTickerProviderStateMixin {
+class _AdminApprovalsScreenState
+    extends State<AdminApprovalsScreen>
+    with SingleTickerProviderStateMixin {
   late DatabaseReference dbRef;
   late TabController _tabController;
+
+  Map<dynamic, dynamic>? _asMap(dynamic value) {
+    if (value is Map) {
+      return Map<dynamic, dynamic>.from(value);
+    }
+    return null;
+  }
+
+  List<Map<String, dynamic>> _sessionsFromRecord(Map record) {
+    final sessions = <Map<String, dynamic>>[];
+    final raw = record['sessions'];
+
+    if (raw is List) {
+      for (final item in raw) {
+        final map = _asMap(item);
+        if (map != null && map['punchIn'] != null) {
+          sessions.add(
+            map.map((key, value) => MapEntry(key.toString(), value)),
+          );
+        }
+      }
+    } else if (raw is Map) {
+      final entries = raw.entries.toList()
+        ..sort((a, b) => a.key.toString().compareTo(b.key.toString()));
+      for (final entry in entries) {
+        final map = _asMap(entry.value);
+        if (map != null && map['punchIn'] != null) {
+          sessions.add(
+            map.map((key, value) => MapEntry(key.toString(), value)),
+          );
+        }
+      }
+    }
+
+    if (sessions.isEmpty && record['punchIn'] != null) {
+      sessions.add({
+        'punchIn': record['punchIn'],
+        if (record['punchOut'] != null) 'punchOut': record['punchOut'],
+      });
+    }
+
+    return sessions;
+  }
+
+  Widget _streamError(Object? error, {VoidCallback? onRetry}) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.cloud_off_rounded, size: 40),
+            const SizedBox(height: 12),
+            const Text(
+              "Unable to load requests",
+              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              "Please check the connection and try again.",
+              textAlign: TextAlign.center,
+            ),
+            if (error != null) ...[
+              const SizedBox(height: 6),
+              Text(
+                error.toString(),
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 10, color: AppColors.textSecondary),
+              ),
+            ],
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh),
+              label: const Text("Retry"),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   @override
   void initState() {
     super.initState();
+
     dbRef = FirebaseDatabase.instanceFor(
       app: Firebase.app(),
       databaseURL:
           "https://edubotics-attendance-default-rtdb.asia-southeast1.firebasedatabase.app",
     ).ref();
-    _tabController = TabController(length: 4, vsync: this, initialIndex: widget.initialTabIndex.clamp(0, 3));
+
+    _tabController = TabController(
+      length: 4,
+      vsync: this,
+      initialIndex: widget.initialTabIndex.clamp(0, 3),
+    );
   }
 
   @override
@@ -45,7 +135,10 @@ class _AdminApprovalsScreenState extends State<AdminApprovalsScreen> with Single
   }
 
   Future<void> _resolveMessage(String key) async {
-    await dbRef.child('AdminMessages').child(key).update({'status': 'resolved'});
+    await dbRef.child('AdminMessages').child(key).update({
+      'status': 'resolved',
+    });
+    if (mounted) setState(() {});
   }
 
   String _generateOtp() {
@@ -53,11 +146,18 @@ class _AdminApprovalsScreenState extends State<AdminApprovalsScreen> with Single
     return (100000 + rand.nextInt(900000)).toString();
   }
 
-  Future<void> _generateOtpFor(String employeeId, String requestId) async {
+  Future<void> _generateOtpFor(
+    String employeeId,
+    String requestId,
+  ) async {
     final otp = _generateOtp();
     final expiry = DateTime.now().add(const Duration(minutes: 10));
 
-    await dbRef.child("DeviceApprovalRequests").child(employeeId).child(requestId).update({
+    await dbRef
+        .child("DeviceApprovalRequests")
+        .child(employeeId)
+        .child(requestId)
+        .update({
       "status": "otp_ready",
       "otpCode": otp,
       "otpExpiry": expiry.toIso8601String(),
@@ -71,23 +171,39 @@ class _AdminApprovalsScreenState extends State<AdminApprovalsScreen> with Single
     );
 
     if (!mounted) return;
+
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
         title: const Text("OTP Generated"),
         content: Text(
           "Give this code to the employee (valid for 10 minutes):\n\n$otp",
-          style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+          style: const TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+          ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text("Done")),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("Done"),
+          ),
         ],
       ),
     );
   }
 
-  Future<void> _rejectDevice(String employeeId, String requestId) async {
-    await dbRef.child("DeviceApprovalRequests").child(employeeId).child(requestId).update({"status": "rejected"});
+  Future<void> _rejectDevice(
+    String employeeId,
+    String requestId,
+  ) async {
+    await dbRef
+        .child("DeviceApprovalRequests")
+        .child(employeeId)
+        .child(requestId)
+        .update({
+      "status": "rejected",
+    });
 
     await ActivityLogger.log(
       adminId: widget.adminId,
@@ -101,90 +217,271 @@ class _AdminApprovalsScreenState extends State<AdminApprovalsScreen> with Single
       title: "Device Login Rejected",
       message: "Your new-device login request was rejected by the admin.",
     );
+    if (mounted) setState(() {});
   }
 
-  Future<void> _reviewWfh(String employeeId, String dateKey, String decision) async {
-    await dbRef.child("WorkFromHomeRequests").child(employeeId).child(dateKey).update({"status": decision});
+  Future<void> _reviewWfh(
+    String employeeId,
+    String dateKey,
+    String decision,
+  ) async {
+    await dbRef
+        .child("WorkFromHomeRequests")
+        .child(employeeId)
+        .child(dateKey)
+        .update({
+      "status": decision,
+    });
 
     await ActivityLogger.log(
       adminId: widget.adminId,
       adminName: widget.adminName,
-      action: decision == "approved" ? "Approved WFH" : "Rejected WFH",
-      details: "$employeeId \u2014 $dateKey",
+      action: decision == "approved"
+          ? "Approved WFH"
+          : "Rejected WFH",
+      details: "$employeeId — $dateKey",
     );
 
     await NotificationCenter.send(
       employeeId: employeeId,
-      title: decision == "approved" ? "Work From Home Approved" : "Work From Home Rejected",
+      title: decision == "approved"
+          ? "Work From Home Approved"
+          : "Work From Home Rejected",
       message: "Your WFH request for $dateKey was $decision.",
     );
+    if (mounted) setState(() {});
   }
 
-  /// Verifying an auto punch-out is NOT a shortcut to a free full day. The
-  /// admin only supplies the real checkout time; the day is then run through
-  /// the exact same 9-hour (gross, break included) rule as any normal punch.
-  /// So a verified 9:00 AM \u2192 6:00 PM day is a full day, but a verified
-  /// 9:00 AM \u2192 4:00 PM day is a mis-punch and owes the shortfall, same as
-  /// if the employee had punched out themselves at 4:00 PM.
-  Future<void> _reviewPunchRequest(Map<String, dynamic> request, String decision) async {
-    final employeeId = request['employeeId'].toString();
-    final date = request['date'].toString();
+  /// Handles the existing Punchout Request workflow.
+  ///
+  /// MIS-PUNCH is only a temporary system state.
+  ///
+  /// When an admin approves the request:
+  ///   1. The admin chooses the employee's actual punch-out time.
+  ///   2. The attendance is recalculated using the actual punch-in
+  ///      and selected punch-out.
+  ///   3. The final attendance becomes either:
+  ///        - Full Day
+  ///        - Work-Pending
+  ///   4. Temporary automatic/MIS-PUNCH fields are removed.
+  ///   5. 11:59 PM is NOT retained as the actual punch-out.
+  ///   6. No punch-out GPS/location is invented.
+  Future<void> _reviewPunchRequest(
+    Map<String, dynamic> request,
+    String decision,
+  ) async {
+    final employeeId = request['employeeId']?.toString() ?? '';
+    final date = request['date']?.toString() ?? '';
+    if (employeeId.isEmpty || date.isEmpty) return;
+
     TimeOfDay? selectedTime;
+
     if (decision == 'approved') {
-      final suggested = AttendanceCalculator.toMinutes(request['suggestedPunchOut']?.toString()) ??
-          AttendanceCalculator.checkOutEndMinutes;
+      final suggested = AttendanceCalculator.toMinutes(
+            request['suggestedPunchOut']?.toString(),
+          ) ??
+          AttendanceCalculator.toMinutes('11:59 PM')!;
+
       selectedTime = await showTimePicker(
         context: context,
-        initialTime: TimeOfDay(hour: suggested ~/ 60, minute: suggested % 60),
+        initialTime: TimeOfDay(
+          hour: suggested ~/ 60,
+          minute: suggested % 60,
+        ),
         helpText: 'Select verified checkout time',
       );
+
       if (selectedTime == null) return;
     }
+
     final selectedText = selectedTime?.format(context);
-    await dbRef.child('PunchRequests').child(employeeId).child(date).update({
-      'status': decision,
+    final now = DateTime.now().toIso8601String();
+    final requestRef = dbRef
+        .child('PunchRequests')
+        .child(employeeId)
+        .child(date);
+
+    if (decision == 'rejected') {
+      await requestRef.update({
+        'status': 'rejected',
+        'reviewedBy': widget.adminId,
+        'reviewedAt': now,
+      });
+
+      await dbRef
+          .child('Attendance')
+          .child(employeeId)
+          .child(date)
+          .update({
+        'status': 'MIS-PUNCH',
+        'attendanceStatus': 'MIS-PUNCH',
+        'punchoutRequestStatus': 'rejected',
+      });
+
+      await ActivityLogger.log(
+        adminId: widget.adminId,
+        adminName: widget.adminName,
+        action: 'Rejected Punchout Request',
+        details: '$employeeId — $date',
+      );
+
+      await NotificationCenter.send(
+        employeeId: employeeId,
+        title: 'Punchout request rejected',
+        message:
+            'Your punchout request for $date was rejected by the admin. You can delete the request from Attendance History and submit it again if needed.',
+      );
+
+      if (mounted) setState(() {});
+      return;
+    }
+
+    // Read the real attendance record. The checkout must be written to the
+    // actual LAST open session, not only to the old top-level compatibility
+    // field.
+    final attendanceRef = dbRef
+        .child('Attendance')
+        .child(employeeId)
+        .child(date);
+    final attendanceSnap = await attendanceRef.get();
+    final record = _asMap(attendanceSnap.value);
+
+    if (record == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Attendance record could not be found.')),
+        );
+      }
+      return;
+    }
+
+    final sessions = _sessionsFromRecord(record);
+    if (sessions.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No attendance session was found.')),
+        );
+      }
+      return;
+    }
+
+    final lastIndex = sessions.length - 1;
+    final lastOut = sessions[lastIndex]['punchOut']?.toString().trim();
+
+    // The MIS-PUNCH request must correspond to the last unfinished session.
+    if (lastOut != null && lastOut.isNotEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('This attendance session is already checked out.'),
+          ),
+        );
+      }
+      return;
+    }
+
+    sessions[lastIndex]['punchOut'] = selectedText;
+
+    // Remove temporary fields from every session before saving the final
+    // corrected attendance. Do not create a punch-out location if none exists.
+    for (final session in sessions) {
+      session.remove('temporaryPunchOut');
+      session.remove('autoPunchOut');
+      session.remove('autoCheckedOutAt');
+      session.remove('approvedAutoCheckout');
+      session.remove('misPunch');
+      session.remove('mis_punch');
+      session.remove('misPunchDetectedAt');
+    }
+
+    final calculationSessions = sessions
+        .map(
+          (session) => AttendanceSession(
+            punchIn: session['punchIn'].toString(),
+            punchOut: session['punchOut']?.toString(),
+          ),
+        )
+        .toList();
+
+    final result = AttendanceCalculator.calculateFromSessions(
+      calculationSessions,
+      workFromHome: record['workFromHome'] == true,
+    );
+
+    String finalAttendanceStatus;
+    switch (result.dayType) {
+      case DayType.fullDay:
+        finalAttendanceStatus = 'FULL DAY';
+        break;
+      case DayType.workPending:
+        finalAttendanceStatus = 'WORK-PENDING';
+        break;
+      case DayType.absent:
+        finalAttendanceStatus = 'ABSENT';
+        break;
+    }
+
+    final update = <String, dynamic>{
+      'sessions': sessions,
+      'punchIn': sessions.first['punchIn'],
+      'punchOut': sessions.last['punchOut'],
+      'status': 'Checked Out',
+      'attendanceStatus': finalAttendanceStatus,
+      'netWorkMinutes': (result.netHours * 60).round(),
+      'shortfallMinutes': (result.shortfallHours * 60).round(),
+      'extraWorkMinutes': (result.extraHours * 60).round(),
+      'punchoutRequestStatus': null,
+      'misPunch': null,
+      'mis_punch': null,
+      'misPunchDetectedAt': null,
+      'temporaryPunchOut': null,
+      'autoPunchOut': null,
+      'autoCheckedOutAt': null,
+      'approvedAutoCheckout': null,
+    };
+
+    // Keep existing real location data. Only update a location if the
+    // selected session already contains it; never invent a GPS position.
+    if (sessions.last['punchOutLat'] != null) {
+      update['punchOutLat'] = sessions.last['punchOutLat'];
+    }
+    if (sessions.last['punchOutLng'] != null) {
+      update['punchOutLng'] = sessions.last['punchOutLng'];
+    }
+    if (sessions.last['punchOutAddress'] != null) {
+      update['punchOutAddress'] = sessions.last['punchOutAddress'];
+    }
+
+    await attendanceRef.update(update);
+
+    await requestRef.update({
+      'status': 'approved',
       'reviewedBy': widget.adminId,
-      'reviewedAt': DateTime.now().toIso8601String(),
-      if (selectedText != null) 'selectedPunchOut': selectedText,
+      'reviewedAt': now,
+      'selectedPunchOut': selectedText,
     });
 
-    if (decision == 'approved') {
-      final punchIn = request['punchIn']?.toString();
-      final result = AttendanceCalculator.calculate(punchIn: punchIn, punchOut: selectedText);
-      final isFullDay = result.dayType == DayType.fullDay;
+    await ActivityLogger.log(
+      adminId: widget.adminId,
+      adminName: widget.adminName,
+      action: 'Verified Punchout Request',
+      details:
+          '$employeeId — $date — actual checkout: $selectedText — $finalAttendanceStatus',
+    );
 
-      await dbRef.child('Attendance').child(employeeId).child(date).update({
-        'punchOut': selectedText,
-        'status': 'Checked Out',
-        'attendanceStatus': isFullDay
-            ? 'Full Day (auto punch-out verified)'
-            : 'Mis-punch (auto punch-out verified)',
-        'approvedAutoCheckout': true,
-        // The record is no longer an unresolved auto punch-out \u2014 it's a
-        // normal, classified attendance record now.
-        'autoPunchOut': null,
-        'autoCheckedOutAt': null,
-        'punchoutRequestStatus': null,
-      });
+    final notificationMessage = result.dayType == DayType.fullDay
+        ? 'Your checkout for $date was verified as $selectedText and the day was marked FULL DAY.'
+        : result.dayType == DayType.workPending
+            ? 'Your checkout for $date was verified as $selectedText. The day is WORK-PENDING and ${AttendanceCalculator.formatHours(result.shortfallHours)} remains outstanding.'
+            : 'Your checkout for $date was verified as $selectedText.';
 
-      await NotificationCenter.send(
-        employeeId: employeeId,
-        title: 'Auto checkout approved',
-        message: isFullDay
-            ? 'Your checkout for $date was verified as $selectedText and the day was marked Full Day.'
-            : 'Your checkout for $date was verified as $selectedText. That\'s short of 9 hours, so ${AttendanceCalculator.formatHours(result.shortfallHours)} was added to your outstanding compensation.',
-      );
-    } else {
-      await dbRef.child('Attendance').child(employeeId).child(date).update({
-        'status': 'Auto Checkout Rejected',
-        'attendanceStatus': 'Auto punch-out rejected by admin',
-      });
-      await NotificationCenter.send(
-        employeeId: employeeId,
-        title: 'Auto checkout rejected',
-        message: 'Your auto checkout request for $date was rejected.',
-      );
-    }
+    await NotificationCenter.send(
+      employeeId: employeeId,
+      title: 'Checkout verified',
+      message: notificationMessage,
+    );
+
+    if (mounted) setState(() {});
   }
 
   @override
@@ -193,7 +490,10 @@ class _AdminApprovalsScreenState extends State<AdminApprovalsScreen> with Single
       backgroundColor: AppColors.background,
       appBar: AppBar(
         backgroundColor: AppColors.primary,
-        title: const Text("Other Requests", style: TextStyle(color: Colors.white)),
+        title: const Text(
+          "Other Requests",
+          style: TextStyle(color: Colors.white),
+        ),
         bottom: TabBar(
           controller: _tabController,
           isScrollable: true,
@@ -221,37 +521,76 @@ class _AdminApprovalsScreenState extends State<AdminApprovalsScreen> with Single
   }
 
   Widget _buildMessagesList() {
-    return StreamBuilder<DatabaseEvent>(
-      stream: dbRef.child('AdminMessages').onValue,
+    return FutureBuilder<DatabaseEvent>(
+      future: dbRef.child('AdminMessages').once(),
       builder: (context, snapshot) {
-        if (!snapshot.hasData || snapshot.data!.snapshot.value == null) {
+        if (snapshot.hasError) {
+          return _streamError(snapshot.error);
+        }
+
+        final raw = _asMap(
+          snapshot.hasData ? snapshot.data!.snapshot.value : null,
+        );
+
+        if (raw == null || raw.isEmpty) {
           return const Center(child: Text("No employee messages yet."));
         }
-        final raw = Map<dynamic, dynamic>.from(snapshot.data!.snapshot.value as Map);
-        final items = raw.entries.toList()
-          ..sort((a, b) => (Map<dynamic, dynamic>.from(b.value)["createdAt"] ?? "")
-              .toString()
-              .compareTo((Map<dynamic, dynamic>.from(a.value)["createdAt"] ?? "").toString()));
 
-        if (items.isEmpty) return const Center(child: Text("No employee messages yet."));
+        final items = raw.entries.where((entry) => entry.value is Map).toList()
+          ..sort(
+            (a, b) {
+              final aMap = _asMap(a.value) ?? {};
+              final bMap = _asMap(b.value) ?? {};
+              return (bMap["createdAt"] ?? "")
+                  .toString()
+                  .compareTo((aMap["createdAt"] ?? "").toString());
+            },
+          );
+
+        if (items.isEmpty) {
+          return const Center(child: Text("No employee messages yet."));
+        }
 
         return ListView.builder(
           padding: const EdgeInsets.all(16),
           itemCount: items.length,
           itemBuilder: (_, index) {
             final entry = items[index];
-            final data = Map<dynamic, dynamic>.from(entry.value as Map);
+            final data = _asMap(entry.value) ?? {};
             final resolved = data['status'] == 'resolved';
+
             return Container(
               margin: const EdgeInsets.only(bottom: 10),
-              decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(16), boxShadow: AppShadows.card),
+              decoration: BoxDecoration(
+                color: AppColors.surface,
+                borderRadius: BorderRadius.circular(16),
+                boxShadow: AppShadows.card,
+              ),
               child: ListTile(
-                leading: Icon(Icons.markunread_outlined, color: resolved ? AppColors.textSecondary : AppColors.primary),
-                title: Text(data['employeeName']?.toString() ?? data['employeeId']?.toString() ?? '', style: const TextStyle(fontWeight: FontWeight.w800)),
+                leading: Icon(
+                  Icons.markunread_outlined,
+                  color: resolved ? AppColors.textSecondary : AppColors.primary,
+                ),
+                title: Text(
+                  data['employeeName']?.toString() ??
+                      data['employeeId']?.toString() ??
+                      '',
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
                 subtitle: Text(data['message']?.toString() ?? ''),
                 trailing: resolved
-                    ? const Text("Resolved", style: TextStyle(color: AppColors.success, fontWeight: FontWeight.bold, fontSize: 11))
-                    : TextButton(onPressed: () => _resolveMessage(entry.key.toString()), child: const Text('Resolve')),
+                    ? const Text(
+                        "Resolved",
+                        style: TextStyle(
+                          color: AppColors.success,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 11,
+                        ),
+                      )
+                    : TextButton(
+                        onPressed: () => _resolveMessage(entry.key.toString()),
+                        child: const Text('Resolve'),
+                      ),
               ),
             );
           },
@@ -261,65 +600,115 @@ class _AdminApprovalsScreenState extends State<AdminApprovalsScreen> with Single
   }
 
   Widget _buildDeviceList() {
-    return StreamBuilder<DatabaseEvent>(
-      stream: dbRef.child("DeviceApprovalRequests").onValue,
+    return FutureBuilder<DatabaseEvent>(
+      future: dbRef.child("DeviceApprovalRequests").once(),
       builder: (context, snapshot) {
-        if (!snapshot.hasData || snapshot.data!.snapshot.value == null) {
+        if (snapshot.hasError) {
+          return _streamError(snapshot.error);
+        }
+
+        final empMap = _asMap(
+          snapshot.hasData ? snapshot.data!.snapshot.value : null,
+        );
+
+        if (empMap == null || empMap.isEmpty) {
           return const Center(child: Text("No device login requests"));
         }
 
-        final empMap = Map<dynamic, dynamic>.from(snapshot.data!.snapshot.value as Map);
         final items = <Map<String, dynamic>>[];
 
         empMap.forEach((empId, requestsMap) {
-          final requests = Map<dynamic, dynamic>.from(requestsMap as Map);
+          final requests = _asMap(requestsMap);
+          if (requests == null) return;
+
           requests.forEach((requestId, value) {
-            final req = Map<dynamic, dynamic>.from(value as Map);
-            if (req["status"] == "pending" || req["status"] == "otp_ready") {
-              items.add({...Map<String, dynamic>.from(req), "employeeId": empId, "requestId": requestId});
+            final req = _asMap(value);
+            if (req == null) return;
+
+            final status = req["status"]?.toString().toLowerCase();
+            if (status == "pending" || status == "otp_ready") {
+              items.add({
+                ...req.map((key, value) => MapEntry(key.toString(), value)),
+                "employeeId": empId.toString(),
+                "requestId": requestId.toString(),
+              });
             }
           });
         });
 
-        if (items.isEmpty) return const Center(child: Text("No pending device requests"));
+        if (items.isEmpty) {
+          return const Center(child: Text("No pending device requests"));
+        }
 
         return ListView.builder(
           padding: const EdgeInsets.all(16),
           itemCount: items.length,
           itemBuilder: (context, index) {
             final item = items[index];
-            final isOtpReady = item["status"] == "otp_ready";
+            final isOtpReady = item["status"]?.toString().toLowerCase() == "otp_ready";
 
             return Container(
               margin: const EdgeInsets.only(bottom: 10),
               padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(14), boxShadow: AppShadows.card),
+              decoration: BoxDecoration(
+                color: AppColors.surface,
+                borderRadius: BorderRadius.circular(14),
+                boxShadow: AppShadows.card,
+              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text("${item["employeeName"]} (${item["employeeId"]})", style: const TextStyle(fontWeight: FontWeight.bold)),
+                  Text(
+                    "${item["employeeName"] ?? item["employeeId"]} (${item["employeeId"]})",
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
                   const SizedBox(height: 4),
-                  Text("Device: ${item["deviceModel"]}", style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+                  Text(
+                    "Device: ${item["deviceModel"] ?? "--"}",
+                    style: const TextStyle(
+                      color: AppColors.textSecondary,
+                      fontSize: 13,
+                    ),
+                  ),
                   if (isOtpReady) ...[
                     const SizedBox(height: 6),
-                    Text("OTP: ${item["otpCode"]}", style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold)),
+                    Text(
+                      "OTP: ${item["otpCode"] ?? "--"}",
+                      style: const TextStyle(
+                        color: AppColors.primary,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                   ],
                   const SizedBox(height: 10),
                   Row(
                     children: [
                       Expanded(
                         child: OutlinedButton(
-                          style: OutlinedButton.styleFrom(foregroundColor: AppColors.danger),
-                          onPressed: () => _rejectDevice(item["employeeId"], item["requestId"]),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: AppColors.danger,
+                          ),
+                          onPressed: () => _rejectDevice(
+                            item["employeeId"].toString(),
+                            item["requestId"].toString(),
+                          ),
                           child: const Text("Reject"),
                         ),
                       ),
                       const SizedBox(width: 10),
                       Expanded(
                         child: ElevatedButton(
-                          style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
-                          onPressed: () => _generateOtpFor(item["employeeId"], item["requestId"]),
-                          child: Text(isOtpReady ? "Regenerate OTP" : "Generate OTP", style: const TextStyle(color: Colors.white)),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.primary,
+                          ),
+                          onPressed: () => _generateOtpFor(
+                            item["employeeId"].toString(),
+                            item["requestId"].toString(),
+                          ),
+                          child: Text(
+                            isOtpReady ? "Regenerate OTP" : "Generate OTP",
+                            style: const TextStyle(color: Colors.white),
+                          ),
                         ),
                       ),
                     ],
@@ -334,43 +723,74 @@ class _AdminApprovalsScreenState extends State<AdminApprovalsScreen> with Single
   }
 
   Widget _buildWfhList() {
-    return StreamBuilder<DatabaseEvent>(
-      stream: dbRef.child("WorkFromHomeRequests").onValue,
+    return FutureBuilder<DatabaseEvent>(
+      future: dbRef.child("WorkFromHomeRequests").once(),
       builder: (context, snapshot) {
-        if (!snapshot.hasData || snapshot.data!.snapshot.value == null) {
+        if (snapshot.hasError) {
+          return _streamError(snapshot.error);
+        }
+
+        final empMap = _asMap(
+          snapshot.hasData ? snapshot.data!.snapshot.value : null,
+        );
+
+        if (empMap == null || empMap.isEmpty) {
           return const Center(child: Text("No WFH requests"));
         }
 
-        final empMap = Map<dynamic, dynamic>.from(snapshot.data!.snapshot.value as Map);
         final items = <Map<String, dynamic>>[];
 
         empMap.forEach((empId, datesMap) {
-          final dates = Map<dynamic, dynamic>.from(datesMap as Map);
+          final dates = _asMap(datesMap);
+          if (dates == null) return;
+
           dates.forEach((dateKey, value) {
-            final req = Map<dynamic, dynamic>.from(value as Map);
-            if (req["status"] == "pending") {
-              items.add({...Map<String, dynamic>.from(req), "employeeId": empId, "dateKey": dateKey});
+            final req = _asMap(value);
+            if (req == null) return;
+
+            if (req["status"]?.toString().toLowerCase() == "pending") {
+              items.add({
+                ...req.map((key, value) => MapEntry(key.toString(), value)),
+                "employeeId": empId.toString(),
+                "dateKey": dateKey.toString(),
+              });
             }
           });
         });
 
-        if (items.isEmpty) return const Center(child: Text("No pending WFH requests"));
+        if (items.isEmpty) {
+          return const Center(child: Text("No pending WFH requests"));
+        }
 
         return ListView.builder(
           padding: const EdgeInsets.all(16),
           itemCount: items.length,
           itemBuilder: (context, index) {
             final item = items[index];
+
             return Container(
               margin: const EdgeInsets.only(bottom: 10),
               padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(14), boxShadow: AppShadows.card),
+              decoration: BoxDecoration(
+                color: AppColors.surface,
+                borderRadius: BorderRadius.circular(14),
+                boxShadow: AppShadows.card,
+              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text("${item["employeeName"] ?? item["employeeId"]}", style: const TextStyle(fontWeight: FontWeight.bold)),
+                  Text(
+                    "${item["employeeName"] ?? item["employeeId"]} (${item["employeeId"]})",
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
                   const SizedBox(height: 4),
-                  Text("Date: ${item["dateKey"]}", style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+                  Text(
+                    "Date: ${item["dateKey"]}",
+                    style: const TextStyle(
+                      color: AppColors.textSecondary,
+                      fontSize: 13,
+                    ),
+                  ),
                   if (item["address"] != null) ...[
                     const SizedBox(height: 4),
                     Row(
@@ -380,7 +800,10 @@ class _AdminApprovalsScreenState extends State<AdminApprovalsScreen> with Single
                         Expanded(
                           child: Text(
                             item["address"].toString(),
-                            style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
+                            style: const TextStyle(
+                              color: AppColors.textSecondary,
+                              fontSize: 12,
+                            ),
                           ),
                         ),
                       ],
@@ -391,17 +814,32 @@ class _AdminApprovalsScreenState extends State<AdminApprovalsScreen> with Single
                     children: [
                       Expanded(
                         child: OutlinedButton(
-                          style: OutlinedButton.styleFrom(foregroundColor: AppColors.danger),
-                          onPressed: () => _reviewWfh(item["employeeId"], item["dateKey"], "rejected"),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: AppColors.danger,
+                          ),
+                          onPressed: () => _reviewWfh(
+                            item["employeeId"].toString(),
+                            item["dateKey"].toString(),
+                            "rejected",
+                          ),
                           child: const Text("Reject"),
                         ),
                       ),
                       const SizedBox(width: 10),
                       Expanded(
                         child: ElevatedButton(
-                          style: ElevatedButton.styleFrom(backgroundColor: AppColors.success),
-                          onPressed: () => _reviewWfh(item["employeeId"], item["dateKey"], "approved"),
-                          child: const Text("Approve", style: TextStyle(color: Colors.white)),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.success,
+                          ),
+                          onPressed: () => _reviewWfh(
+                            item["employeeId"].toString(),
+                            item["dateKey"].toString(),
+                            "approved",
+                          ),
+                          child: const Text(
+                            "Approve",
+                            style: TextStyle(color: Colors.white),
+                          ),
                         ),
                       ),
                     ],
@@ -416,33 +854,111 @@ class _AdminApprovalsScreenState extends State<AdminApprovalsScreen> with Single
   }
 
   Widget _buildPunchRequests() {
-    return StreamBuilder<DatabaseEvent>(
-      stream: dbRef.child('PunchRequests').onValue,
+    return FutureBuilder<DatabaseEvent>(
+      future: dbRef.child('PunchRequests').once(),
       builder: (context, snapshot) {
-        if (!snapshot.hasData || snapshot.data!.snapshot.value == null) return const Center(child: Text('No punch requests'));
-        final employees = Map<dynamic, dynamic>.from(snapshot.data!.snapshot.value as Map);
+        if (snapshot.hasError) {
+          return _streamError(snapshot.error);
+        }
+
+        final employees = _asMap(
+          snapshot.hasData ? snapshot.data!.snapshot.value : null,
+        );
+
+        if (employees == null || employees.isEmpty) {
+          return const Center(child: Text('No punch requests'));
+        }
+
         final requests = <Map<String, dynamic>>[];
+
         employees.forEach((employeeId, values) {
-          final dates = Map<dynamic, dynamic>.from(values as Map);
+          final dates = _asMap(values);
+          if (dates == null) return;
+
           dates.forEach((date, value) {
-            final request = Map<dynamic, dynamic>.from(value as Map);
-            // This queue is reserved for an employee who forgot to check out.
-            // Short-day / compensation records have their own Attendance tab.
-            if (request['status'] == 'pending' && request['type'] == 'auto_checkout') {
-              requests.add({...Map<String, dynamic>.from(request), 'employeeId': employeeId.toString(), 'date': date.toString()});
+            final request = _asMap(value);
+            if (request == null) return;
+
+            final status = request['status']?.toString().toLowerCase();
+            final type = request['type']?.toString().toLowerCase();
+
+            if (status == 'pending' && type == 'mis_punch') {
+              requests.add({
+                ...request.map((key, value) => MapEntry(key.toString(), value)),
+                'employeeId': employeeId.toString(),
+                'date': date.toString(),
+              });
             }
           });
         });
-        if (requests.isEmpty) return const Center(child: Text('No pending punch requests'));
-        return ListView.builder(padding: const EdgeInsets.all(16), itemCount: requests.length, itemBuilder: (_, i) {
-          final item = requests[i];
-          return Container(margin: const EdgeInsets.only(bottom: 10), padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(14), boxShadow: AppShadows.card), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('${item['employeeId']} • ${item['date']}', style: const TextStyle(fontWeight: FontWeight.bold)),
-            const SizedBox(height: 4), Text('Check-in: ${item['punchIn'] ?? '--'} • No checkout recorded', style: const TextStyle(color: AppColors.textSecondary)),
-            const SizedBox(height: 4), Text('Suggested boundary: ${item['suggestedPunchOut'] ?? '11:59 PM'}', style: const TextStyle(color: AppColors.textSecondary)),
-            const SizedBox(height: 10), Row(children: [Expanded(child: OutlinedButton(onPressed: () => _reviewPunchRequest(item, 'rejected'), child: const Text('Reject'))), const SizedBox(width: 10), Expanded(child: ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppColors.success), onPressed: () => _reviewPunchRequest(item, 'approved'), child: const Text('Verify & choose time', style: TextStyle(color: Colors.white))))])
-          ]));
-        });
+
+        if (requests.isEmpty) {
+          return const Center(child: Text('No pending punch requests'));
+        }
+
+        return ListView.builder(
+          padding: const EdgeInsets.all(16),
+          itemCount: requests.length,
+          itemBuilder: (_, i) {
+            final item = requests[i];
+
+            return Container(
+              margin: const EdgeInsets.only(bottom: 10),
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: AppColors.surface,
+                borderRadius: BorderRadius.circular(14),
+                boxShadow: AppShadows.card,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '${item['employeeName'] ?? item['employeeId']} (${item['employeeId']}) • ${item['date']}',
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Check-in: ${item['punchIn'] ?? '--'} • No checkout recorded',
+                    style: const TextStyle(color: AppColors.textSecondary),
+                  ),
+                  if (item['message'] != null &&
+                      item['message'].toString().trim().isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      'Employee note: ${item['message']}',
+                      style: const TextStyle(color: AppColors.textSecondary),
+                    ),
+                  ],
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => _reviewPunchRequest(item, 'rejected'),
+                          child: const Text('Reject'),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.success,
+                          ),
+                          onPressed: () => _reviewPunchRequest(item, 'approved'),
+                          child: const Text(
+                            'Verify & choose time',
+                            style: TextStyle(color: Colors.white),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            );
+          },
+        );
       },
     );
   }

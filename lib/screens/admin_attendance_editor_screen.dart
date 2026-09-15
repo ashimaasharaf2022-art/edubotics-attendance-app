@@ -6,28 +6,23 @@ import 'package:intl/intl.dart';
 import '../utils/app_colors.dart';
 import '../utils/attendance_calculator.dart';
 
-/// Admin/Super Admin only editor for one employee's attendance day.
+/// Admin/Super Admin editor for one employee's attendance day.
 ///
-/// IMPORTANT:
-/// - Employee HistoryScreen never opens this screen.
-/// - HistoryScreen opens this screen only when viewerIsAdmin == true.
-/// - Supports unlimited attendance sessions in one day.
-/// - Also supports old single punchIn/punchOut records.
+/// Rules:
+/// - Supports unlimited sessions.
+/// - Supports old single punchIn/punchOut records.
+/// - Preserves session-specific locations.
+/// - Never creates or changes GPS locations.
+/// - Does not use temporary MIS-PUNCH punch-out as real punch-out.
+/// - An open session remains Checked In.
+/// - Closed sessions are classified as FULL DAY / WORK-PENDING / ABSENT.
+/// - No half-day classification.
 ///
-/// This constructor accepts BOTH:
-///   date: '2026-08-26'
-/// and:
-///   initialDate: DateTime(2026, 8, 26)
-///
-/// This keeps it compatible with the existing screens in the project.
 class AdminAttendanceEditorScreen extends StatefulWidget {
   final String employeeId;
   final String employeeName;
 
-  /// Existing callers may pass the Firebase date key.
   final String? date;
-
-  /// HistoryScreen may pass the DateTime of the tapped day.
   final DateTime? initialDate;
 
   final String adminId;
@@ -59,7 +54,6 @@ class _AdminAttendanceEditorScreenState
 
   Map<String, dynamic> _original = {};
 
-  /// Firebase attendance date key.
   String get _dateKey {
     if (widget.date != null && widget.date!.trim().isNotEmpty) {
       return widget.date!.trim();
@@ -77,11 +71,13 @@ class _AdminAttendanceEditorScreenState
   void initState() {
     super.initState();
 
-    _recordRef = FirebaseDatabase.instanceFor(
+    final database = FirebaseDatabase.instanceFor(
       app: Firebase.app(),
       databaseURL:
           'https://edubotics-attendance-default-rtdb.asia-southeast1.firebasedatabase.app',
-    )
+    );
+
+    _recordRef = database
         .ref()
         .child('Attendance')
         .child(widget.employeeId)
@@ -90,42 +86,98 @@ class _AdminAttendanceEditorScreenState
     _load();
   }
 
+  // ===========================================================================
+  // HELPERS
+  // ===========================================================================
+
   Map<String, dynamic> _map(dynamic value) {
     if (value is Map) {
       return value.map(
-        (key, value) => MapEntry(key.toString(), value),
+        (key, value) => MapEntry(
+          key.toString(),
+          value,
+        ),
       );
     }
 
     return <String, dynamic>{};
   }
 
+  String? _stringValue(dynamic value) {
+    if (value == null) {
+      return null;
+    }
+
+    final text = value.toString().trim();
+
+    if (text.isEmpty) {
+      return null;
+    }
+
+    return text;
+  }
+
+  bool _hasValue(dynamic value) {
+    if (value == null) {
+      return false;
+    }
+
+    if (value is String) {
+      return value.trim().isNotEmpty;
+    }
+
+    return true;
+  }
+
+  // ===========================================================================
+  // LOAD
+  // ===========================================================================
+
   Future<void> _load() async {
     try {
       final snapshot = await _recordRef.get();
 
       _original = _map(snapshot.value);
-      final raw = _original['sessions'];
 
       _sessions.clear();
 
-      // New multiple-session format.
+      final raw = _original['sessions'];
+
+      // -----------------------------------------------------------------------
+      // MULTIPLE SESSION LIST
+      // -----------------------------------------------------------------------
+
       if (raw is List) {
         for (final item in raw) {
           final session = _map(item);
 
-          if (session['punchIn'] != null) {
-            _sessions.add(
-              _EditableSession(
-                punchIn: session['punchIn'].toString(),
-                punchOut: session['punchOut']?.toString(),
-              ),
-            );
+          if (!_hasValue(session['punchIn'])) {
+            continue;
           }
+
+          _sessions.add(
+            _EditableSession(
+              punchIn: session['punchIn'].toString(),
+              punchOut: _stringValue(
+                session['punchOut'],
+              ),
+              punchInLat: session['punchInLat'],
+              punchInLng: session['punchInLng'],
+              punchInAddress:
+                  _stringValue(session['punchInAddress']),
+              punchOutLat: session['punchOutLat'],
+              punchOutLng: session['punchOutLng'],
+              punchOutAddress:
+                  _stringValue(session['punchOutAddress']),
+            ),
+          );
         }
       }
 
-      // Firebase can sometimes return an indexed object/map.
+      // -----------------------------------------------------------------------
+      // MULTIPLE SESSION MAP
+      // -----------------------------------------------------------------------
+
       else if (raw is Map) {
         final entries = raw.entries.toList()
           ..sort(
@@ -137,36 +189,69 @@ class _AdminAttendanceEditorScreenState
         for (final entry in entries) {
           final session = _map(entry.value);
 
-          if (session['punchIn'] != null) {
-            _sessions.add(
-              _EditableSession(
-                punchIn: session['punchIn'].toString(),
-                punchOut: session['punchOut']?.toString(),
-              ),
-            );
+          if (!_hasValue(session['punchIn'])) {
+            continue;
           }
+
+          _sessions.add(
+            _EditableSession(
+              punchIn: session['punchIn'].toString(),
+              punchOut: _stringValue(
+                session['punchOut'],
+              ),
+              punchInLat: session['punchInLat'],
+              punchInLng: session['punchInLng'],
+              punchInAddress:
+                  _stringValue(session['punchInAddress']),
+              punchOutLat: session['punchOutLat'],
+              punchOutLng: session['punchOutLng'],
+              punchOutAddress:
+                  _stringValue(session['punchOutAddress']),
+            ),
+          );
         }
       }
 
-      // Backward compatibility with old single-session records.
-      if (_sessions.isEmpty && _original['punchIn'] != null) {
+      // -----------------------------------------------------------------------
+      // OLD SINGLE SESSION FORMAT
+      // -----------------------------------------------------------------------
+
+      if (_sessions.isEmpty && _hasValue(_original['punchIn'])) {
         _sessions.add(
           _EditableSession(
             punchIn: _original['punchIn'].toString(),
-            punchOut: _original['punchOut']?.toString(),
+            punchOut: _stringValue(
+              _original['punchOut'],
+            ),
+            punchInLat: _original['punchInLat'],
+            punchInLng: _original['punchInLng'],
+            punchInAddress:
+                _stringValue(_original['punchInAddress']),
+            punchOutLat: _original['punchOutLat'],
+            punchOutLng: _original['punchOutLng'],
+            punchOutAddress:
+                _stringValue(_original['punchOutAddress']),
           ),
         );
       }
     } catch (e) {
       if (mounted) {
-        _showError('Could not load attendance: $e');
+        _showError(
+          'Could not load attendance: $e',
+        );
       }
     }
 
     if (mounted) {
-      setState(() => _loading = false);
+      setState(() {
+        _loading = false;
+      });
     }
   }
+
+  // ===========================================================================
+  // TIME HELPERS
+  // ===========================================================================
 
   int? _minutes(String value) {
     final text = value.trim();
@@ -186,8 +271,16 @@ class _AdminAttendanceEditorScreenState
     ).firstMatch(text);
 
     if (match != null) {
-      var hour = int.tryParse(match.group(1)!) ?? 0;
-      final minute = int.tryParse(match.group(2)!) ?? 0;
+      var hour = int.tryParse(
+            match.group(1)!,
+          ) ??
+          0;
+
+      final minute = int.tryParse(
+            match.group(2)!,
+          ) ??
+          0;
+
       final period = match.group(3)?.toLowerCase();
 
       if (period == 'pm' && hour < 12) {
@@ -210,8 +303,12 @@ class _AdminAttendanceEditorScreenState
   }
 
   String _formatTimeOfDay(TimeOfDay time) {
-    final hour = time.hourOfPeriod == 0 ? 12 : time.hourOfPeriod;
-    final minute = time.minute.toString().padLeft(2, '0');
+    final hour =
+        time.hourOfPeriod == 0 ? 12 : time.hourOfPeriod;
+
+    final minute =
+        time.minute.toString().padLeft(2, '0');
+
     final suffix =
         time.period == DayPeriod.am ? 'AM' : 'PM';
 
@@ -246,7 +343,10 @@ class _AdminAttendanceEditorScreenState
   }) async {
     final picked = await showTimePicker(
       context: context,
-      initialTime: _timeOfDay(current, end: end),
+      initialTime: _timeOfDay(
+        current,
+        end: end,
+      ),
       helpText: title,
     );
 
@@ -256,6 +356,10 @@ class _AdminAttendanceEditorScreenState
 
     return _formatTimeOfDay(picked);
   }
+
+  // ===========================================================================
+  // SESSION MANAGEMENT
+  // ===========================================================================
 
   void _addSession() {
     setState(() {
@@ -295,6 +399,10 @@ class _AdminAttendanceEditorScreenState
     }
   }
 
+  // ===========================================================================
+  // VALIDATION
+  // ===========================================================================
+
   bool _validate() {
     if (_sessions.isEmpty) {
       return true;
@@ -303,16 +411,21 @@ class _AdminAttendanceEditorScreenState
     for (var i = 0; i < _sessions.length; i++) {
       final session = _sessions[i];
 
-      final inMinutes = _minutes(session.punchIn);
+      final inMinutes = _minutes(
+        session.punchIn,
+      );
 
       final outMinutes = session.punchOut == null
           ? null
-          : _minutes(session.punchOut!);
+          : _minutes(
+              session.punchOut!,
+            );
 
       if (inMinutes == null) {
         _showError(
           'Session ${i + 1}: invalid punch-in time.',
         );
+
         return false;
       }
 
@@ -321,6 +434,7 @@ class _AdminAttendanceEditorScreenState
         _showError(
           'Session ${i + 1}: punch-out must be after punch-in.',
         );
+
         return false;
       }
 
@@ -329,12 +443,15 @@ class _AdminAttendanceEditorScreenState
 
         final previousOut = previous.punchOut == null
             ? null
-            : _minutes(previous.punchOut!);
+            : _minutes(
+                previous.punchOut!,
+              );
 
         if (previousOut == null) {
           _showError(
             'Close Session $i before starting Session ${i + 1}.',
           );
+
           return false;
         }
 
@@ -342,6 +459,7 @@ class _AdminAttendanceEditorScreenState
           _showError(
             'Session ${i + 1} overlaps Session $i.',
           );
+
           return false;
         }
       }
@@ -350,102 +468,295 @@ class _AdminAttendanceEditorScreenState
     return true;
   }
 
+  // ===========================================================================
+  // CLASSIFICATION
+  // ===========================================================================
+
+  String _classificationFromResult(
+    AttendanceResult result,
+  ) {
+    switch (result.dayType) {
+      case DayType.fullDay:
+        return 'FULL DAY';
+
+      case DayType.workPending:
+        return 'WORK-PENDING';
+
+      case DayType.absent:
+        return 'ABSENT';
+    }
+  }
+
+  // ===========================================================================
+  // SAVE
+  // ===========================================================================
+
   Future<void> _save() async {
     if (_saving || !_validate()) {
       return;
     }
 
-    setState(() => _saving = true);
+    setState(() {
+      _saving = true;
+    });
 
     try {
-      // If the admin removes every session, remove the attendance record.
+      // -----------------------------------------------------------------------
+      // REMOVE DAY
+      // -----------------------------------------------------------------------
+
       if (_sessions.isEmpty) {
         await _recordRef.remove();
-      } else {
-        final sessionMaps = _sessions
-            .map(
-              (session) => <String, dynamic>{
-                'punchIn': session.punchIn,
-                if (session.punchOut != null &&
-                    session.punchOut!.isNotEmpty)
-                  'punchOut': session.punchOut,
-              },
-            )
-            .toList();
 
-        final allClosed = _sessions.every(
-          (session) =>
-              session.punchOut != null &&
-              session.punchOut!.isNotEmpty,
+        if (!mounted) {
+          return;
+        }
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Attendance removed successfully.',
+            ),
+          ),
         );
 
-        final firstIn = _sessions.first.punchIn;
+        Navigator.pop(
+          context,
+          true,
+        );
 
-        final lastOut =
-            allClosed ? _sessions.last.punchOut : null;
-
-        final update = <String, dynamic>{
-          ..._original,
-
-          'employeeId': widget.employeeId,
-          'date': _dateKey,
-
-          // New multi-session data.
-          'sessions': sessionMaps,
-
-          // Keep these legacy fields for existing reports/screens.
-          'punchIn': firstIn,
-
-          'manualEdited': true,
-          'manualEditedBy': widget.adminId,
-          'manualEditedByName': widget.adminName,
-          'manualEditedAt':
-              DateTime.now().toIso8601String(),
-
-          'status': allClosed
-              ? 'Checked Out'
-              : 'Checked In',
-        };
-
-        if (lastOut != null) {
-          update['punchOut'] = lastOut;
-
-          update.remove('autoPunchOut');
-          update.remove('approvedAutoCheckout');
-        } else {
-          update.remove('punchOut');
-        }
-
-        // Use the existing attendance calculator so the admin edit
-        // follows the same working-hours / full-day / mis-punch rules.
-        try {
-          final calculatorSessions = sessionMaps
-              .map(
-                (session) => AttendanceSession(
-                  punchIn: session['punchIn'].toString(),
-                  punchOut:
-                      session['punchOut']?.toString(),
-                ),
-              )
-              .toList();
-
-          final result =
-              AttendanceCalculator.calculateFromSessions(
-            calculatorSessions,
-            workFromHome:
-                update['workFromHome'] == true,
-          );
-
-          update['workingHours'] = result.netHours;
-          update['attendanceStatus'] =
-              result.dayType.name;
-        } catch (_) {
-          // The attendance record is still saved even if an
-          // older calculator implementation lacks these fields.
-        }
-
-        await _recordRef.set(update);
+        return;
       }
+
+      // -----------------------------------------------------------------------
+      // BUILD SESSIONS
+      // -----------------------------------------------------------------------
+
+      final sessionMaps = _sessions.map(
+        (session) {
+          final map = <String, dynamic>{
+            'punchIn': session.punchIn,
+          };
+
+          if (session.punchOut != null &&
+              session.punchOut!.trim().isNotEmpty) {
+            map['punchOut'] = session.punchOut;
+          }
+
+          // ---------------------------------------------------------------
+          // PUNCH-IN LOCATION
+          // ---------------------------------------------------------------
+
+          if (session.punchInLat != null) {
+            map['punchInLat'] = session.punchInLat;
+          }
+
+          if (session.punchInLng != null) {
+            map['punchInLng'] = session.punchInLng;
+          }
+
+          if (session.punchInAddress != null &&
+              session.punchInAddress!.trim().isNotEmpty) {
+            map['punchInAddress'] =
+                session.punchInAddress;
+          }
+
+          // ---------------------------------------------------------------
+          // PUNCH-OUT LOCATION
+          // ---------------------------------------------------------------
+
+          if (session.punchOutLat != null) {
+            map['punchOutLat'] = session.punchOutLat;
+          }
+
+          if (session.punchOutLng != null) {
+            map['punchOutLng'] = session.punchOutLng;
+          }
+
+          if (session.punchOutAddress != null &&
+              session.punchOutAddress!.trim().isNotEmpty) {
+            map['punchOutAddress'] =
+                session.punchOutAddress;
+          }
+
+          return map;
+        },
+      ).toList();
+
+      final allClosed = _sessions.every(
+        (session) =>
+            session.punchOut != null &&
+            session.punchOut!.trim().isNotEmpty,
+      );
+
+      final firstSession = _sessions.first;
+      final lastSession = _sessions.last;
+
+      final update = <String, dynamic>{
+        ..._original,
+
+        'employeeId': widget.employeeId,
+        'date': _dateKey,
+
+        'sessions': sessionMaps,
+
+        // Legacy compatibility.
+        'punchIn': firstSession.punchIn,
+
+        'manualEdited': true,
+        'manualEditedBy': widget.adminId,
+        'manualEditedByName': widget.adminName,
+        'manualEditedAt':
+            DateTime.now().toIso8601String(),
+
+        'status': allClosed
+            ? 'Checked Out'
+            : 'Checked In',
+      };
+
+      // -----------------------------------------------------------------------
+      // TOP LEVEL PUNCH-OUT
+      // -----------------------------------------------------------------------
+
+      if (allClosed) {
+        update['punchOut'] =
+            lastSession.punchOut;
+
+        // The record is now a normal attendance record.
+        update.remove('temporaryPunchOut');
+        update.remove('autoPunchOut');
+        update.remove('approvedAutoCheckout');
+        update.remove('misPunch');
+        update.remove('misPunchDetectedAt');
+        update.remove('punchoutRequestStatus');
+      } else {
+        // Open attendance is NOT final attendance.
+        //
+        // Never manufacture a punch-out.
+        update.remove('punchOut');
+      }
+
+      // -----------------------------------------------------------------------
+      // TOP LEVEL LOCATION COMPATIBILITY
+      //
+      // These are compatibility fields only.
+      // Session-specific locations remain the source of truth.
+      // -----------------------------------------------------------------------
+
+      if (firstSession.punchInLat != null) {
+        update['punchInLat'] =
+            firstSession.punchInLat;
+      } else {
+        update.remove('punchInLat');
+      }
+
+      if (firstSession.punchInLng != null) {
+        update['punchInLng'] =
+            firstSession.punchInLng;
+      } else {
+        update.remove('punchInLng');
+      }
+
+      if (firstSession.punchInAddress != null &&
+          firstSession.punchInAddress!.trim().isNotEmpty) {
+        update['punchInAddress'] =
+            firstSession.punchInAddress;
+      } else {
+        update.remove('punchInAddress');
+      }
+
+      if (lastSession.punchOutLat != null) {
+        update['punchOutLat'] =
+            lastSession.punchOutLat;
+      } else {
+        update.remove('punchOutLat');
+      }
+
+      if (lastSession.punchOutLng != null) {
+        update['punchOutLng'] =
+            lastSession.punchOutLng;
+      } else {
+        update.remove('punchOutLng');
+      }
+
+      if (lastSession.punchOutAddress != null &&
+          lastSession.punchOutAddress!.trim().isNotEmpty) {
+        update['punchOutAddress'] =
+            lastSession.punchOutAddress;
+      } else {
+        update.remove('punchOutAddress');
+      }
+
+      // -----------------------------------------------------------------------
+      // FINAL ATTENDANCE CLASSIFICATION
+      // -----------------------------------------------------------------------
+
+      if (allClosed) {
+        final calculatorSessions = sessionMaps.map(
+          (session) {
+            return AttendanceSession(
+              punchIn: session['punchIn'].toString(),
+              punchOut:
+                  session['punchOut']?.toString(),
+            );
+          },
+        ).toList();
+
+        final result =
+            AttendanceCalculator.calculateFromSessions(
+          calculatorSessions,
+          workFromHome:
+              update['workFromHome'] == true,
+        );
+
+        final classification =
+            _classificationFromResult(result);
+
+        update['attendanceStatus'] =
+            classification;
+
+        update['dayType'] =
+            result.dayType.name;
+
+        update['workingHours'] =
+            result.netHours;
+
+        update['netHours'] =
+            result.netHours;
+
+        update['shortfallHours'] =
+            result.shortfallHours;
+
+        update['extraHours'] =
+            result.extraHours;
+      } else {
+        // ---------------------------------------------------------------
+        // OPEN SESSION
+        // ---------------------------------------------------------------
+        //
+        // An open session is not:
+        // FULL DAY
+        // WORK-PENDING
+        // ABSENT
+        //
+        // It remains Checked In until the employee punches out.
+        //
+
+        update.remove('attendanceStatus');
+        update.remove('dayType');
+        update.remove('workingHours');
+        update.remove('netHours');
+        update.remove('shortfallHours');
+        update.remove('extraHours');
+      }
+
+      // -----------------------------------------------------------------------
+      // SAVE
+      // -----------------------------------------------------------------------
+
+      await _recordRef.set(
+        update,
+      );
 
       if (!mounted) {
         return;
@@ -459,43 +770,71 @@ class _AdminAttendanceEditorScreenState
         ),
       );
 
-      // true tells HistoryScreen to reload the day/month data.
-      Navigator.pop(context, true);
+      Navigator.pop(
+        context,
+        true,
+      );
     } catch (e) {
       if (mounted) {
-        _showError('Could not save attendance: $e');
+        _showError(
+          'Could not save attendance: $e',
+        );
       }
     } finally {
       if (mounted) {
-        setState(() => _saving = false);
+        setState(() {
+          _saving = false;
+        });
       }
     }
   }
 
-  Future<void> _removeSession(int index) async {
+  // ===========================================================================
+  // REMOVE SESSION
+  // ===========================================================================
+
+  Future<void> _removeSession(
+    int index,
+  ) async {
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Remove session?'),
-        content: Text(
-          'Remove Session ${index + 1} from this attendance day?',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () =>
-                Navigator.pop(context, false),
-            child: const Text('Cancel'),
+      builder: (_) {
+        return AlertDialog(
+          title: const Text(
+            'Remove session?',
           ),
-          TextButton(
-            onPressed: () =>
-                Navigator.pop(context, true),
-            style: TextButton.styleFrom(
-              foregroundColor: Colors.red,
+          content: Text(
+            'Remove Session ${index + 1} from this attendance day?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.pop(
+                  context,
+                  false,
+                );
+              },
+              child: const Text(
+                'Cancel',
+              ),
             ),
-            child: const Text('Remove'),
-          ),
-        ],
-      ),
+            TextButton(
+              onPressed: () {
+                Navigator.pop(
+                  context,
+                  true,
+                );
+              },
+              style: TextButton.styleFrom(
+                foregroundColor: Colors.red,
+              ),
+              child: const Text(
+                'Remove',
+              ),
+            ),
+          ],
+        );
+      },
     );
 
     if (confirmed == true && mounted) {
@@ -505,15 +844,27 @@ class _AdminAttendanceEditorScreenState
     }
   }
 
-  void _showError(String message) {
+  // ===========================================================================
+  // ERROR
+  // ===========================================================================
+
+  void _showError(
+    String message,
+  ) {
     if (!mounted) {
       return;
     }
 
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
+      SnackBar(
+        content: Text(message),
+      ),
     );
   }
+
+  // ===========================================================================
+  // WORKING HOURS PREVIEW
+  // ===========================================================================
 
   String _workingHoursPreview() {
     if (_sessions.isEmpty) {
@@ -523,14 +874,14 @@ class _AdminAttendanceEditorScreenState
     try {
       final result =
           AttendanceCalculator.calculateFromSessions(
-        _sessions
-            .map(
-              (session) => AttendanceSession(
-                punchIn: session.punchIn,
-                punchOut: session.punchOut,
-              ),
-            )
-            .toList(),
+        _sessions.map(
+          (session) {
+            return AttendanceSession(
+              punchIn: session.punchIn,
+              punchOut: session.punchOut,
+            );
+          },
+        ).toList(),
         workFromHome:
             _original['workFromHome'] == true,
       );
@@ -543,23 +894,32 @@ class _AdminAttendanceEditorScreenState
     }
   }
 
+  // ===========================================================================
+  // BUILD
+  // ===========================================================================
+
   @override
-  Widget build(BuildContext context) {
-    final dateLabel =
-        DateFormat('EEE, dd MMM yyyy').format(
-      _selectedDate,
-    );
+  Widget build(
+    BuildContext context,
+  ) {
+    final dateLabel = DateFormat(
+      'EEE, dd MMM yyyy',
+    ).format(_selectedDate);
 
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
         backgroundColor: AppColors.primary,
         foregroundColor: Colors.white,
-        title: const Text('Edit Attendance'),
+        title: const Text(
+          'Edit Attendance',
+        ),
         actions: [
           IconButton(
             onPressed: _saving ? null : _save,
-            icon: const Icon(Icons.check),
+            icon: const Icon(
+              Icons.check,
+            ),
             tooltip: 'Save',
           ),
         ],
@@ -571,6 +931,10 @@ class _AdminAttendanceEditorScreenState
           : ListView(
               padding: const EdgeInsets.all(16),
               children: [
+                // =============================================================
+                // EMPLOYEE HEADER
+                // =============================================================
+
                 Container(
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
@@ -619,8 +983,7 @@ class _AdminAttendanceEditorScreenState
                             style: const TextStyle(
                               fontWeight:
                                   FontWeight.bold,
-                              color:
-                                  AppColors.primary,
+                              color: AppColors.primary,
                             ),
                           ),
                         ],
@@ -655,7 +1018,10 @@ class _AdminAttendanceEditorScreenState
                     ),
                   ),
 
-                ..._sessions.asMap().entries.map(
+                ..._sessions
+                    .asMap()
+                    .entries
+                    .map(
                       (entry) => _sessionCard(
                         entry.key,
                         entry.value,
@@ -664,12 +1030,17 @@ class _AdminAttendanceEditorScreenState
 
                 const SizedBox(height: 8),
 
+                // =============================================================
+                // ADD SESSION
+                // =============================================================
+
                 OutlinedButton.icon(
                   onPressed:
                       _saving ? null : _addSession,
                   icon: const Icon(Icons.add),
-                  label:
-                      const Text('Add Session'),
+                  label: const Text(
+                    'Add Session',
+                  ),
                   style:
                       OutlinedButton.styleFrom(
                     foregroundColor:
@@ -689,12 +1060,17 @@ class _AdminAttendanceEditorScreenState
 
                 const SizedBox(height: 16),
 
+                // =============================================================
+                // ADMIN NOTICE
+                // =============================================================
+
                 Container(
                   padding:
                       const EdgeInsets.all(14),
                   decoration: BoxDecoration(
-                    color: Colors.amber
-                        .withValues(alpha: .10),
+                    color: Colors.amber.withValues(
+                      alpha: .10,
+                    ),
                     borderRadius:
                         BorderRadius.circular(12),
                   ),
@@ -718,6 +1094,10 @@ class _AdminAttendanceEditorScreenState
                 ),
 
                 const SizedBox(height: 20),
+
+                // =============================================================
+                // SAVE
+                // =============================================================
 
                 SizedBox(
                   height: 50,
@@ -746,8 +1126,7 @@ class _AdminAttendanceEditorScreenState
                         ElevatedButton.styleFrom(
                       backgroundColor:
                           AppColors.primary,
-                      foregroundColor:
-                          Colors.white,
+                      foregroundColor: Colors.white,
                       shape:
                           RoundedRectangleBorder(
                         borderRadius:
@@ -761,18 +1140,22 @@ class _AdminAttendanceEditorScreenState
     );
   }
 
+  // ===========================================================================
+  // SESSION CARD
+  // ===========================================================================
+
   Widget _sessionCard(
     int index,
     _EditableSession session,
   ) {
     return Container(
-      margin:
-          const EdgeInsets.only(bottom: 10),
+      margin: const EdgeInsets.only(
+        bottom: 10,
+      ),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: AppColors.surface,
-        borderRadius:
-            BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(14),
         boxShadow: AppShadows.card,
       ),
       child: Column(
@@ -790,11 +1173,11 @@ class _AdminAttendanceEditorScreenState
               ),
               const Spacer(),
               IconButton(
-                onPressed: _saving
-                    ? null
-                    : () => _removeSession(
-                          index,
-                        ),
+                onPressed:
+                    _saving
+                        ? null
+                        : () =>
+                            _removeSession(index),
                 icon: const Icon(
                   Icons.delete_outline,
                   color: Colors.red,
@@ -805,6 +1188,10 @@ class _AdminAttendanceEditorScreenState
           ),
 
           const SizedBox(height: 4),
+
+          // ===============================================================
+          // TIMES
+          // ===============================================================
 
           Row(
             children: [
@@ -830,10 +1217,226 @@ class _AdminAttendanceEditorScreenState
               ),
             ],
           ),
+
+          const SizedBox(height: 12),
+
+          // ===============================================================
+          // SESSION LOCATIONS
+          // ===============================================================
+
+          _locationSection(session),
         ],
       ),
     );
   }
+
+  // ===========================================================================
+  // LOCATION SECTION
+  // ===========================================================================
+
+  Widget _locationSection(
+    _EditableSession session,
+  ) {
+    final hasPunchInLocation =
+        session.punchInLat != null ||
+            session.punchInLng != null ||
+            (session.punchInAddress != null &&
+                session.punchInAddress!
+                    .trim()
+                    .isNotEmpty);
+
+    final hasPunchOutLocation =
+        session.punchOutLat != null ||
+            session.punchOutLng != null ||
+            (session.punchOutAddress != null &&
+                session.punchOutAddress!
+                    .trim()
+                    .isNotEmpty);
+
+    if (!hasPunchInLocation &&
+        !hasPunchOutLocation) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(11),
+        decoration: BoxDecoration(
+          color: AppColors.background,
+          borderRadius:
+              BorderRadius.circular(10),
+          border: Border.all(
+            color: AppColors.divider,
+          ),
+        ),
+        child: const Row(
+          crossAxisAlignment:
+              CrossAxisAlignment.start,
+          children: [
+            Icon(
+              Icons.location_off_outlined,
+              size: 18,
+              color: AppColors.textSecondary,
+            ),
+            SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'No location recorded for this session.',
+                style: TextStyle(
+                  color:
+                      AppColors.textSecondary,
+                  fontSize: 12,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.background,
+        borderRadius:
+            BorderRadius.circular(10),
+        border: Border.all(
+          color: AppColors.divider,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment:
+            CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(
+                Icons.location_on_outlined,
+                size: 18,
+                color: AppColors.primary,
+              ),
+              SizedBox(width: 7),
+              Text(
+                'Session Locations',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 10),
+
+          if (hasPunchInLocation)
+            _locationRow(
+              icon: Icons.login_outlined,
+              title: 'Punch-in location',
+              latitude: session.punchInLat,
+              longitude: session.punchInLng,
+              address:
+                  session.punchInAddress,
+            ),
+
+          if (hasPunchInLocation &&
+              hasPunchOutLocation)
+            const Divider(height: 18),
+
+          if (hasPunchOutLocation)
+            _locationRow(
+              icon: Icons.logout_outlined,
+              title: 'Punch-out location',
+              latitude: session.punchOutLat,
+              longitude: session.punchOutLng,
+              address:
+                  session.punchOutAddress,
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _locationRow({
+    required IconData icon,
+    required String title,
+    dynamic latitude,
+    dynamic longitude,
+    String? address,
+  }) {
+    final hasCoordinates =
+        latitude != null &&
+            longitude != null;
+
+    final cleanAddress =
+        address?.trim();
+
+    return Row(
+      crossAxisAlignment:
+          CrossAxisAlignment.start,
+      children: [
+        Icon(
+          icon,
+          size: 17,
+          color: AppColors.primary,
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(
+            crossAxisAlignment:
+                CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color:
+                      AppColors.textSecondary,
+                ),
+              ),
+
+              if (cleanAddress != null &&
+                  cleanAddress.isNotEmpty) ...[
+                const SizedBox(height: 2),
+                Text(
+                  cleanAddress,
+                  style: const TextStyle(
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+
+              if (hasCoordinates) ...[
+                const SizedBox(height: 2),
+                Text(
+                  '${latitude.toString()}, ${longitude.toString()}',
+                  style: const TextStyle(
+                    fontSize: 10,
+                    color:
+                        AppColors.textSecondary,
+                  ),
+                ),
+              ],
+
+              if ((cleanAddress == null ||
+                      cleanAddress.isEmpty) &&
+                  !hasCoordinates)
+                const Text(
+                  'Location unavailable',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color:
+                        AppColors.textSecondary,
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ===========================================================================
+  // TIME TILE
+  // ===========================================================================
 
   Widget _timeTile({
     required String label,
@@ -846,8 +1449,7 @@ class _AdminAttendanceEditorScreenState
       borderRadius:
           BorderRadius.circular(12),
       child: Container(
-        padding:
-            const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
           color: AppColors.background,
           borderRadius:
@@ -892,12 +1494,30 @@ class _AdminAttendanceEditorScreenState
   }
 }
 
+// =============================================================================
+// EDITABLE SESSION
+// =============================================================================
+
 class _EditableSession {
   String punchIn;
   String? punchOut;
 
+  dynamic punchInLat;
+  dynamic punchInLng;
+  String? punchInAddress;
+
+  dynamic punchOutLat;
+  dynamic punchOutLng;
+  String? punchOutAddress;
+
   _EditableSession({
     required this.punchIn,
     required this.punchOut,
+    this.punchInLat,
+    this.punchInLng,
+    this.punchInAddress,
+    this.punchOutLat,
+    this.punchOutLng,
+    this.punchOutAddress,
   });
 }

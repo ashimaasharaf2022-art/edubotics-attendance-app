@@ -1,11 +1,12 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 
 import 'firebase_options.dart';
 import 'screens/login_screens.dart';
 import 'screens/employee_shell.dart';
+import 'screens/admin_shell.dart';
+import 'screens/superadmin_shell.dart';
 import 'utils/session_manager.dart';
 import 'utils/notification_helper.dart';
 import 'utils/app_colors.dart';
@@ -99,19 +100,53 @@ class _SessionGateState extends State<SessionGate> {
 
     if (!mounted) return;
 
-    if (session == null || FirebaseAuth.instance.currentUser == null) {
+    if (session == null) {
       await SessionManager.clearSession();
-      Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const LoginScreen()));
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const LoginScreen()),
+      );
       return;
     }
 
     final employeeId = session["employeeId"]!;
+    final role = (session["role"]?.toString() ?? "employee")
+        .trim()
+        .toLowerCase();
+    final employeeName = session["employeeName"]?.toString();
 
-    // Admins and super admins are employees too. They start at My Dashboard
-    // and can explicitly open their privileged panel from Account Settings.
+    if (role == "superadmin") {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => SuperAdminShell(
+            superAdminId: employeeId,
+            superAdminName: employeeName,
+          ),
+        ),
+      );
+      return;
+    }
+
+    if (role == "admin") {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => AdminShell(
+            employeeId: employeeId,
+            employeeName: employeeName,
+            isSuperAdmin: false,
+          ),
+        ),
+      );
+      return;
+    }
+
     Navigator.pushReplacement(
       context,
-      MaterialPageRoute(builder: (_) => EmployeeShell(employeeId: employeeId)),
+      MaterialPageRoute(
+        builder: (_) => EmployeeShell(employeeId: employeeId),
+      ),
     );
   }
 
