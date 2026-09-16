@@ -11,6 +11,7 @@ import '../utils/time_integrity_helper.dart';
 import '../utils/work_schedule.dart';
 import '../utils/notification_center.dart';
 import '../utils/progress_painters.dart';
+import '../widgets/workora_logo.dart';
 import 'leave_screen.dart';
 import 'notifications_screen.dart';
 import 'history_screen.dart';
@@ -1943,7 +1944,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       errorBuilder:
           (_, __, ___) => Icon(
         Icons.blur_circular_rounded,
-        color: AppColors.brightBlue,
+        color: AppColors.green,
         size: size,
       ),
     );
@@ -1985,922 +1986,358 @@ class _DashboardScreenState extends State<DashboardScreen> {
   // ---------------------------------------------------------------------------
 
   @override
-  Widget build(
-    BuildContext context,
-  ) {
+  Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor:
-          _kHeroDark1,
-      body: Column(
-        children: [
-          _buildHeader(),
-          Expanded(
-            child: Container(
-              width: double.infinity,
-              decoration:
-                  const BoxDecoration(
-                color:
-                    AppColors.background,
-                borderRadius:
-                    BorderRadius.vertical(
-                  top: Radius.circular(28),
+      backgroundColor: AppColors.background,
+      body: SafeArea(
+        bottom: false,
+        child: isLoading
+            ? const Center(child: CircularProgressIndicator())
+            : RefreshIndicator(
+                onRefresh: () async {
+                  await _checkPreviousDayForMisPunch();
+                  await _loadTodayAttendance();
+                  await _loadMonthlyAttendance();
+                  await _refreshLocation();
+                },
+                child: ListView(
+                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
+                  children: [
+                    _buildHeader(),
+                    const SizedBox(height: 10),
+                    _buildGreeting(),
+                    const SizedBox(height: 14),
+                    _buildHeroCard(),
+                    const SizedBox(height: 18),
+                    _buildWeeklyStrip(),
+                    const SizedBox(height: 14),
+                    _buildWorkedBreakCard(),
+                    const SizedBox(height: 12),
+                    _buildLeaveBalanceCard(),
+                    const SizedBox(height: 22),
+                    _buildQuickActions(),
+                    const SizedBox(height: 12),
+                    _buildWorkModeSwitcher(),
+                    const SizedBox(height: 16),
+                    _buildPublishAnnouncementCard(),
+                    if (pendingAutoCheckoutDate != null) ...[
+                      const SizedBox(height: 14),
+                      _autoCheckoutBanner(),
+                    ],
+                  ],
                 ),
               ),
-              child: isLoading
-                  ? const Center(
-                      child:
-                          CircularProgressIndicator(),
-                    )
-                  : RefreshIndicator(
-                      onRefresh: () async {
-                        await _checkPreviousDayForMisPunch();
-                        await _loadTodayAttendance();
-                        await _loadMonthlyAttendance();
-                        await _refreshLocation();
-                      },
-                      child: ListView(
-                        padding:
-                            const EdgeInsets
-                                .fromLTRB(
-                          20,
-                          14,
-                          20,
-                          16,
-                        ),
-                        children: [
-                          _buildTabSwitcher(),
-
-                          if (pendingAutoCheckoutDate !=
-                              null) ...[
-                            const SizedBox(
-                              height: 12,
-                            ),
-                            _autoCheckoutBanner(),
-                          ],
-
-                          const SizedBox(
-                            height: 14,
-                          ),
-
-                          _buildHeroCard(),
-
-                          const SizedBox(
-                            height: 16,
-                          ),
-
-                          _buildQuickActions(),
-
-                          const SizedBox(
-                            height: 16,
-                          ),
-
-                          _buildAnnouncementCarousel(),
-                        ],
-                      ),
-                    ),
-            ),
-          ),
-        ],
       ),
     );
   }
+
 
   // ---------------------------------------------------------------------------
   // HEADER
   // ---------------------------------------------------------------------------
 
   Widget _buildHeader() {
-    ImageProvider? avatarImage;
+    final name = employeeName.isEmpty ? widget.employeeId : employeeName;
 
-    if (employeePhotoBase64 != null &&
-        employeePhotoBase64!.isNotEmpty) {
-      try {
-        avatarImage = MemoryImage(
-          base64Decode(
-            employeePhotoBase64!,
-          ),
-        );
-      } catch (_) {
-        avatarImage = null;
-      }
-    }
-
-    return Container(
-      decoration:
-          const BoxDecoration(
-        gradient: LinearGradient(
-          begin:
-              Alignment.topCenter,
-          end:
-              Alignment.bottomCenter,
-          colors: [
-            _kHeroDark1,
-            _kHeroDark2,
-          ],
-        ),
-      ),
-      child: SafeArea(
-        bottom: false,
-        child: Padding(
-          padding:
-              const EdgeInsets.fromLTRB(
-            20,
-            8,
-            20,
-            22,
-          ),
-          child: Column(
-            crossAxisAlignment:
-                CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  _logoMark(),
-                  const SizedBox(
-                    width: 6,
-                  ),
-                  const Text(
-                    "workora",
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 18,
-                      fontWeight:
-                          FontWeight.w800,
-                      letterSpacing: -.6,
-                    ),
-                  ),
-                ],
-              ),
-
-              const SizedBox(
-                height: 18,
-              ),
-
-              Row(
-                crossAxisAlignment:
-                    CrossAxisAlignment.center,
-                children: [
-                  GestureDetector(
-                    onTap:
-                        _openAccountSettings,
-                    child: Stack(
-                      children: [
-                        Container(
-                          width: 52,
-                          height: 52,
-                          decoration:
-                              BoxDecoration(
-                            shape:
-                                BoxShape.circle,
-                            gradient:
-                                avatarImage ==
-                                        null
-                                    ? AppGradients
-                                        .punchCard
-                                    : null,
-                          ),
-                          child:
-                              avatarImage !=
-                                      null
-                                  ? ClipOval(
-                                      child:
-                                          Image(
-                                        image:
-                                            avatarImage,
-                                        width:
-                                            52,
-                                        height:
-                                            52,
-                                        fit: BoxFit
-                                            .cover,
-                                      ),
-                                    )
-                                  : Center(
-                                      child:
-                                          Text(
-                                        _initials,
-                                        style:
-                                            const TextStyle(
-                                          color:
-                                              Colors.white,
-                                          fontWeight:
-                                              FontWeight.w800,
-                                          fontSize:
-                                              18,
-                                        ),
-                                      ),
-                                    ),
-                        ),
-
-                        Positioned(
-                          right: 1,
-                          bottom: 1,
-                          child: Container(
-                            width: 13,
-                            height: 13,
-                            decoration:
-                                BoxDecoration(
-                              color:
-                                  AppColors
-                                      .success,
-                              shape:
-                                  BoxShape.circle,
-                              border:
-                                  Border.all(
-                                color:
-                                    _kHeroDark2,
-                                width: 2,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  const SizedBox(
-                    width: 14,
-                  ),
-
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment:
-                          CrossAxisAlignment
-                              .start,
-                      children: [
-                        Text(
-                          "$_greeting,",
-                          style:
-                              const TextStyle(
-                            color:
-                                Colors.white60,
-                            fontSize: 13,
-                          ),
-                        ),
-
-                        const SizedBox(
-                          height: 2,
-                        ),
-
-                        Text(
-                          "${employeeName.isEmpty ? widget.employeeId : employeeName} \u{1F44B}",
-                          style:
-                              const TextStyle(
-                            color:
-                                Colors.white,
-                            fontSize: 19,
-                            fontWeight:
-                                FontWeight.w800,
-                          ),
-                          maxLines: 1,
-                          overflow:
-                              TextOverflow
-                                  .ellipsis,
-                        ),
-
-                        const SizedBox(
-                          height: 4,
-                        ),
-
-                        Container(
-                          padding:
-                              const EdgeInsets
-                                  .symmetric(
-                            horizontal: 8,
-                            vertical: 3,
-                          ),
-                          decoration:
-                              BoxDecoration(
-                            color: Colors
-                                .white
-                                .withOpacity(
-                              0.12,
-                            ),
-                            borderRadius:
-                                BorderRadius
-                                    .circular(
-                              20,
-                            ),
-                          ),
-                          child: Text(
-                            "ID: ${widget.employeeId}",
-                            style:
-                                const TextStyle(
-                              color:
-                                  Colors.white70,
-                              fontSize: 11,
-                              fontWeight:
-                                  FontWeight.w600,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  const SizedBox(
-                    width: 10,
-                  ),
-
-                  GestureDetector(
-                    onTap: () =>
-                        Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) =>
-                            NotificationsScreen(
-                          employeeId:
-                              widget.employeeId,
-                        ),
-                      ),
-                    ),
-                    child:
-                        StreamBuilder<int>(
-                      stream:
-                          NotificationCenter
-                              .unreadCount(
-                        widget.employeeId,
-                      ),
-                      builder:
-                          (context, snapshot) {
-                        final count =
-                            snapshot.data ??
-                                0;
-
-                        return Container(
-                          padding:
-                              const EdgeInsets
-                                  .all(10),
-                          decoration:
-                              BoxDecoration(
-                            color: Colors
-                                .white
-                                .withOpacity(
-                              0.1,
-                            ),
-                            borderRadius:
-                                BorderRadius
-                                    .circular(
-                              14,
-                            ),
-                          ),
-                          child: Badge(
-                            isLabelVisible:
-                                count > 0,
-                            label:
-                                Text(
-                              "$count",
-                            ),
-                            backgroundColor:
-                                AppColors
-                                    .danger,
-                            child:
-                                const Icon(
-                              Icons
-                                  .notifications_outlined,
-                              color:
-                                  Colors.white,
-                              size: 20,
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                ],
-              ),
-            ],
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Expanded(
+          child: WorkoraLogo(
+            width: 168,
+            height: 48,
+            fit: BoxFit.contain,
           ),
         ),
-      ),
+        StreamBuilder<int>(
+          stream: NotificationCenter.unreadCount(widget.employeeId),
+          builder: (context, snapshot) {
+            final count = snapshot.data ?? 0;
+            return InkWell(
+              borderRadius: BorderRadius.circular(22),
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => NotificationsScreen(employeeId: widget.employeeId),
+                ),
+              ),
+              child: Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  shape: BoxShape.circle,
+                  boxShadow: AppShadows.card,
+                ),
+                child: Badge(
+                  isLabelVisible: count > 0,
+                  label: Text('$count'),
+                  backgroundColor: AppColors.danger,
+                  child: const Icon(
+                    Icons.notifications_none_rounded,
+                    color: AppColors.textPrimary,
+                    size: 22,
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+        const SizedBox(width: 10),
+        InkWell(
+          borderRadius: BorderRadius.circular(22),
+          onTap: _openAccountSettings,
+          child: Container(
+            width: 44,
+            height: 44,
+            decoration: const BoxDecoration(
+              color: AppColors.primary,
+              shape: BoxShape.circle,
+            ),
+            alignment: Alignment.center,
+            child: Text(
+              _initials.isEmpty ? name.substring(0, 1).toUpperCase() : _initials,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 13,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
+
 
   // ---------------------------------------------------------------------------
   // HERO CARD
   // ---------------------------------------------------------------------------
 
+  Widget _buildGreeting() {
+    final name = employeeName.isEmpty ? widget.employeeId : employeeName;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          _greeting,
+          style: const TextStyle(
+            color: AppColors.textSecondary,
+            fontSize: 13,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          name,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+            color: AppColors.textPrimary,
+            fontSize: 19,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildHeroCard() {
     final checkedIn = _hasOpenTodaySession;
-
-    // MIS-PUNCH is only a temporary state for an old, unclosed day.
-    // It must never block a new check-in/check-out session for today.
-    final isMisPunch =
-        status == "MIS-PUNCH" && !checkedIn;
-
-    final done = false;
-
-    final hasSessions =
-        _todaySessions.isNotEmpty;
-
-    final isWfh =
-        showHomeTab &&
-            wfhStatusToday ==
-                "approved";
-
-    final canAct =
-        !isSubmitting &&
-            !isMisPunch;
-
-    final statusLabel =
-        isMisPunch
-            ? "MIS-PUNCH\nPENDING ADMIN"
-            : (
-                done
-                    ? "YOU ARE\nCOMPLETED"
-                    : (
-                        checkedIn
-                            ? "YOU ARE\nCHECKED IN"
-                            : "READY TO\nCHECK IN"
-                      )
-              );
-
-    final focalTime =
-        checkedIn ||
-                done ||
-                isMisPunch
-            ? punchInTime
-            : DateFormat(
-                "hh:mm a",
-              ).format(_now);
+    final isMisPunch = status == 'MIS-PUNCH' && !checkedIn;
+    final isWfh = showHomeTab && wfhStatusToday == 'approved';
+    final minutes = _workingMinutesLive;
+    final workText = _formatMinutes(minutes);
+    final todayLabel = DateFormat('EEE, dd MMM yyyy').format(_now);
 
     return Container(
-      padding:
-          const EdgeInsets.all(20),
-      decoration:
-          BoxDecoration(
-        gradient:
-            AppGradients.punchCard,
-        borderRadius:
-            BorderRadius.circular(28),
-        boxShadow:
-            AppShadows.hero,
+      padding: const EdgeInsets.fromLTRB(18, 18, 18, 18),
+      decoration: BoxDecoration(
+        color: AppColors.primary,
+        borderRadius: BorderRadius.circular(28),
+        boxShadow: AppShadows.hero,
       ),
       child: Column(
         children: [
           Row(
-            crossAxisAlignment:
-                CrossAxisAlignment
-                    .center,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               Expanded(
+                flex: 5,
                 child: Column(
-                  crossAxisAlignment:
-                      CrossAxisAlignment
-                          .start,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
-                      "CURRENT TIME",
-                      style:
-                          TextStyle(
-                        color:
-                            Colors.white70,
-                        fontSize: 10,
-                        fontWeight:
-                            FontWeight.bold,
-                        letterSpacing:
-                            .5,
+                    Text(
+                      todayLabel,
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
-
-                    const SizedBox(
-                      height: 6,
-                    ),
-
-                    Text(
-                      DateFormat(
-                        "hh:mm a",
-                      ).format(_now),
-                      style:
-                          const TextStyle(
-                        color:
-                            Colors.white,
-                        fontSize: 22,
-                        fontWeight:
-                            FontWeight.w800,
-                      ),
-                    ),
-
-                    const SizedBox(
-                      height: 4,
-                    ),
-
-                    Text(
-                      DateFormat(
-                        "EEE, dd MMM yyyy",
-                      ).format(_now),
-                      style:
-                          const TextStyle(
-                        color:
-                            Colors.white70,
-                        fontSize: 11,
+                    const SizedBox(height: 18),
+                    SizedBox(
+                      width: 118,
+                      height: 118,
+                      child: CustomPaint(
+                        painter: ShiftRingPainter(progress: _shiftProgress),
+                        child: Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                workText,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 19,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              const Text(
+                                'of 9h shift',
+                                style: TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 10,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
                     ),
                   ],
                 ),
               ),
-
-              SizedBox(
-                width: 168,
-                height: 168,
-                child: CustomPaint(
-                  painter:
-                      ShiftRingPainter(
-                    progress:
-                        _shiftProgress,
-                  ),
-                  child:
-                      Center(
-                    child:
-                        Column(
-                      mainAxisSize:
-                          MainAxisSize.min,
-                      children: [
-                        Text(
-                          statusLabel,
-                          textAlign:
-                              TextAlign
-                                  .center,
-                          style:
-                              const TextStyle(
-                            color:
-                                Colors.white70,
-                            fontSize: 9,
-                            fontWeight:
-                                FontWeight
-                                    .bold,
-                            letterSpacing:
-                                .5,
-                            height: 1.3,
-                          ),
-                        ),
-
-                        const SizedBox(
-                          height: 6,
-                        ),
-
-                        Text(
-                          focalTime,
-                          style:
-                              const TextStyle(
-                            color:
-                                Colors.white,
-                            fontSize: 22,
-                            fontWeight:
-                                FontWeight
-                                    .w800,
-                          ),
-                        ),
-
-                        const SizedBox(
-                          height: 10,
-                        ),
-
-                        _buildActionPill(
-                          checkedIn:
-                              checkedIn,
-                          done: done,
-                          canAct:
-                              canAct,
-                          isWfh:
-                              isWfh,
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-
+              const SizedBox(width: 8),
               Expanded(
+                flex: 6,
                 child: Column(
-                  crossAxisAlignment:
-                      CrossAxisAlignment
-                          .start,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    Text(
+                      'Hours worked today',
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 12,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
                     Row(
                       children: [
                         Container(
-                          padding:
-                              const EdgeInsets
-                                  .all(6),
-                          decoration:
-                              BoxDecoration(
-                            color: Colors
-                                .white
-                                .withOpacity(
-                              0.15,
-                            ),
-                            borderRadius:
-                                BorderRadius
-                                    .circular(
-                              8,
-                            ),
-                          ),
-                          child:
-                              const Icon(
-                            Icons
-                                .work_outline_rounded,
-                            color:
-                                Colors.white,
-                            size: 14,
+                          width: 7,
+                          height: 7,
+                          decoration: BoxDecoration(
+                            color: isMisPunch
+                                ? AppColors.warning
+                                : checkedIn
+                                    ? AppColors.primary
+                                    : Colors.white54,
+                            shape: BoxShape.circle,
                           ),
                         ),
-
-                        const SizedBox(
-                          width: 6,
-                        ),
-
-                        const Expanded(
+                        const SizedBox(width: 7),
+                        Expanded(
                           child: Text(
-                            "Today's Work",
-                            style:
-                                TextStyle(
-                              color:
-                                  Colors.white70,
-                              fontSize: 10,
-                              fontWeight:
-                                  FontWeight.bold,
+                            isMisPunch
+                                ? 'MIS-PUNCH'
+                                : checkedIn
+                                    ? 'Checked in'
+                                    : 'Not checked in',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
                             ),
                           ),
                         ),
                       ],
                     ),
-
-                    const SizedBox(
-                      height: 6,
-                    ),
-
-                    Text(
-                      _formatMinutes(
-                        _workingMinutesLive,
-                      ),
-                      style:
-                          const TextStyle(
-                        color:
-                            Colors.white,
-                        fontSize: 15,
-                        fontWeight:
-                            FontWeight.w800,
-                      ),
-                    ),
-
-                    Text(
-                      "of ${_formatMinutes(_shiftTotalMinutes)}",
-                      style:
-                          const TextStyle(
-                        color:
-                            Colors.white60,
-                        fontSize: 10,
-                      ),
-                    ),
-
-                    const SizedBox(
-                      height: 6,
-                    ),
-
-                    ClipRRect(
-                      borderRadius:
-                          BorderRadius
-                              .circular(
-                        6,
-                      ),
-                      child:
-                          LinearProgressIndicator(
-                        value:
-                            _shiftProgress,
-                        minHeight: 5,
-                        backgroundColor:
-                            Colors.white24,
-                        valueColor:
-                            const AlwaysStoppedAnimation(
-                          Colors.white,
+                    const SizedBox(height: 18),
+                    if (isMisPunch)
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        decoration: BoxDecoration(
+                          color: AppColors.warning.withOpacity(.20),
+                          borderRadius: BorderRadius.circular(14),
                         ),
-                      ),
-                    ),
-
-                    const SizedBox(
-                      height: 16,
-                    ),
-
-                    Row(
-                      children: [
-                        Container(
-                          padding:
-                              const EdgeInsets
-                                  .all(6),
-                          decoration:
-                              BoxDecoration(
-                            color: Colors
-                                .white
-                                .withOpacity(
-                              0.15,
+                        child: const Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.pending_actions, color: Colors.white, size: 18),
+                            SizedBox(width: 7),
+                            Text(
+                              'Admin review pending',
+                              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
                             ),
-                            borderRadius:
-                                BorderRadius
-                                    .circular(
-                              8,
-                            ),
-                          ),
-                          child:
-                              const Icon(
-                            Icons
-                                .local_cafe_outlined,
-                            color:
-                                Colors.white,
-                            size: 14,
-                          ),
+                          ],
                         ),
-
-                        const SizedBox(
-                          width: 6,
-                        ),
-
-                        const Expanded(
-                          child: Text(
-                            "Break Time",
-                            style:
-                                TextStyle(
-                              color:
-                                  Colors.white70,
-                              fontSize: 10,
-                              fontWeight:
-                                  FontWeight.bold,
+                      )
+                    else
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          onPressed: isSubmitting
+                              ? null
+                              : () => checkedIn
+                                  ? _punchOut(bypassGeofence: isWfh)
+                                  : _punchIn(bypassGeofence: showHomeTab),
+                          icon: Icon(
+                            checkedIn ? Icons.logout_rounded : Icons.login_rounded,
+                            size: 18,
+                          ),
+                          label: Text(checkedIn ? 'Check out' : 'Check in'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.primary,
+                            foregroundColor: AppColors.textPrimary,
+                            disabledBackgroundColor: AppColors.primary.withOpacity(.45),
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(15),
                             ),
                           ),
                         ),
-                      ],
-                    ),
-
-                    const SizedBox(
-                      height: 6,
-                    ),
-
-                    Text(
-                      _formatMinutes(
-                        _breakMinutesTaken,
                       ),
-                      style:
-                          const TextStyle(
-                        color:
-                            Colors.white,
-                        fontSize: 15,
-                        fontWeight:
-                            FontWeight.w800,
-                      ),
-                    ),
-
-                    Text(
-                      "of ${_formatMinutes(_breakBudgetMinutes)}",
-                      style:
-                          const TextStyle(
-                        color:
-                            Colors.white60,
-                        fontSize: 10,
-                      ),
-                    ),
-
-                    const SizedBox(
-                      height: 6,
-                    ),
-
-                    ClipRRect(
-                      borderRadius:
-                          BorderRadius
-                              .circular(
-                        6,
-                      ),
-                      child:
-                          LinearProgressIndicator(
-                        value:
-                            _breakProgress,
-                        minHeight: 5,
-                        backgroundColor:
-                            Colors.white24,
-                        valueColor:
-                            const AlwaysStoppedAnimation(
-                          Colors.white,
-                        ),
-                      ),
-                    ),
                   ],
                 ),
               ),
             ],
           ),
-
-          const SizedBox(
-            height: 18,
-          ),
-
+          if (checkedIn && (WorkSchedule.isLunchBreak || WorkSchedule.isTeaBreak)) ...[
+            const SizedBox(height: 12),
+            _buildBreakStatus(),
+          ],
+          const SizedBox(height: 12),
           Row(
             children: [
-              const Icon(
-                Icons.location_on_outlined,
-                color:
-                    Colors.white,
-                size: 16,
-              ),
-
-              const SizedBox(
-                width: 6,
-              ),
-
+              const Icon(Icons.location_on_outlined, color: Colors.white, size: 16),
+              const SizedBox(width: 5),
               Expanded(
                 child: Text(
-                  isWfh
-                      ? "Work From Home"
-                      : (
-                          currentLocation
-                                  ?.address ??
-                              "Checking your location..."
-                        ),
+                  isWfh ? 'Work From Home' : (currentLocation?.address ?? 'Location unavailable'),
                   maxLines: 1,
-                  overflow:
-                      TextOverflow.ellipsis,
-                  style:
-                      const TextStyle(
-                    color:
-                        Colors.white,
-                    fontSize: 12,
-                  ),
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: Colors.white70, fontSize: 11),
                 ),
               ),
-
               if (!isWfh) ...[
-                const Icon(
-                  Icons.verified_rounded,
-                  color:
-                      Color(0xFFA7F3D0),
-                  size: 16,
-                ),
-                const SizedBox(
-                  width: 4,
-                ),
+                const Icon(Icons.verified_rounded, color: Color(0xFFA7F3D0), size: 15),
+                const SizedBox(width: 4),
                 const Text(
-                  "GPS Verified",
-                  style:
-                      TextStyle(
-                    color:
-                        Color(0xFFA7F3D0),
-                    fontSize: 11,
-                    fontWeight:
-                        FontWeight.w700,
-                  ),
+                  'GPS Verified',
+                  style: TextStyle(color: Color(0xFFA7F3D0), fontSize: 10, fontWeight: FontWeight.w700),
                 ),
               ],
             ],
           ),
-
-          if (checkedIn &&
-              !done &&
-              (WorkSchedule.isLunchBreak ||
-                  WorkSchedule.isTeaBreak)) ...[
-            const SizedBox(
-              height: 14,
-            ),
-            _buildBreakStatus(),
-          ],
-
-          if (showHomeTab &&
-              wfhStatusToday !=
-                  "approved" &&
-              !checkedIn) ...[
-            const SizedBox(
-              height: 12,
-            ),
-
-            TextButton.icon(
-              onPressed:
-                  wfhStatusToday ==
-                          null
-                      ? _requestWfh
-                      : null,
-              icon: const Icon(
-                Icons
-                    .home_work_outlined,
-                color:
-                    Colors.white,
-                size: 17,
-              ),
-              label: Text(
-                wfhStatusToday ==
-                        "pending"
-                    ? "WFH approval pending"
-                    : "Request Work From Home",
-                style:
-                    const TextStyle(
-                  color:
-                      Colors.white,
-                  fontWeight:
-                      FontWeight.bold,
-                ),
-              ),
-            ),
-          ],
         ],
       ),
     );
   }
+
 
   // ---------------------------------------------------------------------------
   // ACTION PILL
@@ -3419,133 +2856,401 @@ class _DashboardScreenState extends State<DashboardScreen> {
   // QUICK ACTIONS
   // ---------------------------------------------------------------------------
 
-  Widget _buildQuickActions() {
+  Widget _buildWeeklyStrip() {
+    final today = DateTime.now();
+    final start = DateTime(today.year, today.month, today.day).subtract(const Duration(days: 6));
+    final days = List.generate(7, (i) => start.add(Duration(days: i)));
+
     return Column(
-      crossAxisAlignment:
-          CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          "Quick Actions",
-          style:
-              TextStyle(
-            fontSize: 16,
-            fontWeight:
-                FontWeight.w800,
-            color:
-                AppColors
-                    .textPrimary,
-          ),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            const Text('This week', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+            Text('${DateFormat('d').format(start)} – ${DateFormat('d MMM').format(today)}', style: const TextStyle(fontSize: 11, color: AppColors.textSecondary)),
+          ],
         ),
-
-        const SizedBox(
-          height: 12,
-        ),
-
-        IntrinsicHeight(
+        const SizedBox(height: 10),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+          decoration: BoxDecoration(color: AppColors.lightGreen.withOpacity(.55), borderRadius: BorderRadius.circular(20)),
           child: Row(
-            children: [
-              Expanded(
-                child:
-                    _quickAction(
-                  "assets/icons/leave.png",
-                  "Request\nLeave",
-                  AppColors.violet,
-                  () => Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) =>
-                          LeaveScreen(
-                        employeeId:
-                            widget.employeeId,
-                        employeeName:
-                            employeeName.isEmpty
-                                ? widget.employeeId
-                                : employeeName,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-
-              const SizedBox(
-                width: 10,
-              ),
-
-              Expanded(
-                child:
-                    _quickAction(
-                  "assets/icons/payslip.png",
-                  "Payslip\n",
-                  AppColors.indigo,
-                  () => Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) =>
-                          PayslipRequestScreen(
-                        employeeId:
-                            widget.employeeId,
-                        employeeName:
-                            employeeName.isEmpty
-                                ? widget.employeeId
-                                : employeeName,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-
-              const SizedBox(
-                width: 10,
-              ),
-
-              Expanded(
-                child:
-                    _quickAction(
-                  "assets/icons/live_location.png",
-                  "Live\nLocation",
-                  AppColors.success,
-                  () => Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) =>
-                          const LiveLocationScreen(),
-                    ),
-                  ),
-                ),
-              ),
-
-              const SizedBox(
-                width: 10,
-              ),
-
-              Expanded(
-                child:
-                    _quickAction(
-                  "assets/icons/attendance_history.png",
-                  "Attendance\nHistory",
-                  AppColors.warning,
-                  () => Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) =>
-                          HistoryScreen(
-                        employeeId:
-                            widget.employeeId,
-                        employeeName:
-                            employeeName.isEmpty
-                                ? widget.employeeId
-                                : employeeName,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ],
+            children: days.map((date) {
+              final key = getDateKey(date);
+              final record = allAttendance[key];
+              final isToday = key == getDateKey(today);
+              final state = _weeklyStatus(record, date, isToday);
+              return Expanded(child: _weekDay(date, state.label, state.color, isToday));
+            }).toList(),
           ),
         ),
       ],
     );
   }
+
+  ({String label, Color color}) _weeklyStatus(Map<String, dynamic>? record, DateTime date, bool isToday) {
+    if (isToday) return (label: 'Today', color: AppColors.textPrimary);
+    if (record == null) return (label: 'Absent', color: AppColors.danger);
+    final sessions = _sessionsFromRecord(record);
+    if (record['status']?.toString().toUpperCase() == 'MIS-PUNCH') {
+      return (label: 'Pending', color: AppColors.warning);
+    }
+    if (sessions.isEmpty || sessions.last.punchOut == null || sessions.last.punchOut!.trim().isEmpty) {
+      return (label: 'Pending', color: AppColors.warning);
+    }
+    final result = AttendanceCalculator.calculateFromSessions(sessions, workFromHome: record['workFromHome'] == true);
+    if (result.dayType == DayType.fullDay) return (label: 'Present', color: AppColors.success);
+    if (result.dayType == DayType.workPending) return (label: 'Pending', color: AppColors.warning);
+    return (label: 'Absent', color: AppColors.danger);
+  }
+
+  Widget _weekDay(DateTime date, String label, Color color, bool today) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(DateFormat('EEE').format(date), style: const TextStyle(fontSize: 10, color: AppColors.textSecondary, fontWeight: FontWeight.w600)),
+        const SizedBox(height: 6),
+        Container(
+          width: 36, height: 36,
+          decoration: BoxDecoration(
+            color: today ? AppColors.textPrimary : color.withOpacity(.12),
+            shape: BoxShape.circle,
+            border: today ? Border.all(color: AppColors.primary, width: 2) : null,
+          ),
+          alignment: Alignment.center,
+          child: Text('${date.day}', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: today ? Colors.white : color)),
+        ),
+        const SizedBox(height: 5),
+        Text(label, style: TextStyle(fontSize: 8, fontWeight: FontWeight.w700, color: today ? AppColors.textPrimary : color), textAlign: TextAlign.center),
+      ],
+    );
+  }
+
+  Widget _buildWorkedBreakCard() {
+    return Container(
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(18), border: Border.all(color: AppColors.divider)),
+      child: Row(
+        children: [
+          Expanded(child: _summaryMetric(_formatMinutes(_workingMinutesLive), 'Worked')),
+          Container(width: 1, height: 55, color: AppColors.divider),
+          Expanded(child: _summaryMetric(_formatMinutes(_breakMinutesTaken), 'Break')),
+        ],
+      ),
+    );
+  }
+
+  Widget _summaryMetric(String value, String label) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(value, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+        const SizedBox(height: 2),
+        Text(label, style: const TextStyle(fontSize: 11, color: AppColors.textSecondary)),
+      ]),
+    );
+  }
+
+  Widget _buildLeaveBalanceCard() {
+    return InkWell(
+      borderRadius: BorderRadius.circular(18),
+      onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => LeaveScreen(employeeId: widget.employeeId, employeeName: employeeName.isEmpty ? widget.employeeId : employeeName))),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+        decoration: BoxDecoration(color: AppColors.successLight, borderRadius: BorderRadius.circular(18)),
+        child: Row(children: [
+          Container(width: 40, height: 40, decoration: BoxDecoration(color: AppColors.primary, borderRadius: BorderRadius.circular(12)), child: const Icon(Icons.edit_calendar_rounded, color: AppColors.textPrimary, size: 21)),
+          const SizedBox(width: 12),
+          const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Leave balance', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: AppColors.primary)),
+            SizedBox(height: 2),
+            Text('Manage your leave requests', style: TextStyle(fontSize: 10, color: AppColors.textSecondary)),
+          ])),
+          const Icon(Icons.chevron_right_rounded, color: AppColors.primary),
+        ]),
+      ),
+    );
+  }
+
+  Widget _buildPublishAnnouncementCard() {
+    return StreamBuilder<DatabaseEvent>(
+      stream: dbRef.child('Announcements').onValue,
+      builder: (context, snapshot) {
+        String? latestTitle;
+        if (snapshot.hasData && snapshot.data!.snapshot.value is Map) {
+          final raw = Map<dynamic, dynamic>.from(snapshot.data!.snapshot.value as Map);
+          final items = <Map<String, dynamic>>[];
+          for (final entry in raw.entries) {
+            if (entry.value is Map) {
+              final item = Map<String, dynamic>.from(entry.value as Map);
+              items.add(item);
+            }
+          }
+          items.sort((a, b) => (b['createdAt']?.toString() ?? '').compareTo(a['createdAt']?.toString() ?? ''));
+          if (items.isNotEmpty) latestTitle = items.first['title']?.toString();
+        }
+        return InkWell(
+          borderRadius: BorderRadius.circular(18),
+          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AnnouncementDetailScreen())),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+            decoration: BoxDecoration(color: AppColors.primary, borderRadius: BorderRadius.circular(18)),
+            child: Row(children: [
+              Container(width: 42, height: 42, decoration: BoxDecoration(color: Colors.white.withOpacity(.14), borderRadius: BorderRadius.circular(13)), child: const Icon(Icons.campaign_rounded, color: Colors.white, size: 21)),
+              const SizedBox(width: 12),
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(latestTitle ?? 'Team announcements', style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w800)),
+                const SizedBox(height: 3),
+                Text(latestTitle == null ? 'View important updates from your team' : 'Tap to view the latest announcement', style: const TextStyle(color: Colors.white70, fontSize: 10)),
+              ])),
+              const Icon(Icons.chevron_right_rounded, color: Colors.white),
+            ]),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildWorkModeSwitcher() {
+    final checkedIn = _hasOpenTodaySession;
+    final homeSelected = showHomeTab;
+
+    void blocked() {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            "You checked in via ${checkedInAsWfh == true ? 'Work From Home' : 'Office'} today. Check out first to switch.",
+          ),
+        ),
+      );
+    }
+
+    return Row(
+      children: [
+        Expanded(
+          child: _modeButton(
+            label: 'Office',
+            icon: Icons.apartment_outlined,
+            selected: !homeSelected,
+            onTap: checkedIn && checkedInAsWfh == true ? blocked : () => setState(() => showHomeTab = false),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: _modeButton(
+            label: 'Work from home',
+            icon: Icons.home_work_outlined,
+            selected: homeSelected,
+            onTap: checkedIn && checkedInAsWfh == false ? blocked : () => setState(() => showHomeTab = true),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _modeButton({
+    required String label,
+    required IconData icon,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(15),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 13, horizontal: 12),
+        decoration: BoxDecoration(
+          color: selected ? AppColors.textPrimary : AppColors.lightGreen.withOpacity(.55),
+          borderRadius: BorderRadius.circular(15),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 16, color: selected ? Colors.white : AppColors.textPrimary),
+            const SizedBox(width: 7),
+            Flexible(
+              child: Text(
+                label,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: selected ? Colors.white : AppColors.textPrimary,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildQuickActions() {
+    final name = employeeName.isEmpty ? widget.employeeId : employeeName;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Quick actions',
+          style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: AppColors.textPrimary),
+        ),
+        const SizedBox(height: 12),
+        _modernActionTile(
+          icon: Icons.calendar_month_outlined,
+          title: 'Request leave',
+          subtitle: 'Apply for leave',
+          iconColor: AppColors.primary,
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => LeaveScreen(employeeId: widget.employeeId, employeeName: name),
+            ),
+          ),
+        ),
+        const SizedBox(height: 10),
+        _modernActionTile(
+          icon: Icons.receipt_long_outlined,
+          title: 'Request payslip',
+          subtitle: 'View & download payslips',
+          iconColor: AppColors.primary,
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => PayslipRequestScreen(employeeId: widget.employeeId, employeeName: name),
+            ),
+          ),
+        ),
+        const SizedBox(height: 10),
+        _modernActionTile(
+          icon: Icons.support_agent_rounded,
+          title: 'Raise a ticket',
+          subtitle: 'HR & IT helpdesk',
+          iconColor: AppColors.primary,
+          onTap: _showHelpdeskDialog,
+        ),
+      ],
+    );
+  }
+
+  Widget _modernActionTile({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required Color iconColor,
+    required VoidCallback onTap,
+  }) {
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(18),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(18),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: AppColors.divider),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: AppColors.lightGreen,
+                  borderRadius: BorderRadius.circular(13),
+                ),
+                child: Icon(icon, color: iconColor, size: 21),
+              ),
+              const SizedBox(width: 13),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
+                    const SizedBox(height: 3),
+                    Text(subtitle, style: const TextStyle(fontSize: 11, color: AppColors.textSecondary)),
+                  ],
+                ),
+              ),
+              const Icon(Icons.chevron_right_rounded, color: AppColors.textSecondary, size: 22),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showHelpdeskDialog() async {
+    final subjectController = TextEditingController();
+    final messageController = TextEditingController();
+
+    final submitted = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Raise a ticket'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: subjectController,
+                decoration: const InputDecoration(labelText: 'Subject', hintText: 'What do you need help with?'),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: messageController,
+                minLines: 3,
+                maxLines: 5,
+                decoration: const InputDecoration(labelText: 'Message'),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('CANCEL')),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('SEND'),
+          ),
+        ],
+      ),
+    );
+
+    if (submitted != true || !mounted) return;
+
+    final subject = subjectController.text.trim();
+    final message = messageController.text.trim();
+    if (subject.isEmpty || message.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please enter both subject and message.')));
+      return;
+    }
+
+    try {
+      final requestRef = dbRef.child('HelpdeskRequests').child(widget.employeeId).push();
+      await requestRef.set({
+        'employeeId': widget.employeeId,
+        'employeeName': employeeName.isEmpty ? widget.employeeId : employeeName,
+        'subject': subject,
+        'message': message,
+        'status': 'pending',
+        'createdAt': DateTime.now().toIso8601String(),
+      });
+      await NotificationCenter.sendAdmin(
+        title: 'New Helpdesk Ticket',
+        message: '${employeeName.isEmpty ? widget.employeeId : employeeName} raised a helpdesk ticket: $subject',
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Helpdesk ticket sent.')));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Unable to send ticket: $e')));
+    } finally {
+      subjectController.dispose();
+      messageController.dispose();
+    }
+  }
+
 
   Widget _quickAction(
     String iconAsset,
@@ -3725,7 +3430,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             icon:
                 Icons.logout_rounded,
             color:
-                AppColors.violet,
+                AppColors.green,
             bg:
                 AppColors
                     .background,

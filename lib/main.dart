@@ -48,7 +48,7 @@ class AttendanceApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(
           seedColor: AppColors.primary,
           primary: AppColors.primary,
-          secondary: AppColors.indigo,
+          secondary: AppColors.green,
           surface: AppColors.surface,
         ),
         scaffoldBackgroundColor: AppColors.background,

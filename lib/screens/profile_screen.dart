@@ -1971,7 +1971,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   Icons
                       .person_pin_circle_outlined,
                   color:
-                      AppColors.indigo,
+                      AppColors.info,
                   size: 20,
                 ),
                 const SizedBox(

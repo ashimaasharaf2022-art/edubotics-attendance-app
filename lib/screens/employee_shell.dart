@@ -201,7 +201,7 @@ class _EmployeeShellState extends State<EmployeeShell> {
 
       floatingActionButton:
           FloatingActionButton(
-        backgroundColor: AppColors.indigo,
+        backgroundColor: AppColors.primary,
         foregroundColor: Colors.white,
         onPressed: () {
           Navigator.push(

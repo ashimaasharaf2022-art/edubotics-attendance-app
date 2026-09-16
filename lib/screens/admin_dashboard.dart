@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_database/firebase_database.dart';
 import '../utils/app_colors.dart';
@@ -69,7 +68,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
       'assets/images/workora_logo.png',
       height: size,
       width: size,
-      errorBuilder: (_, __, ___) => Icon(Icons.blur_circular_rounded, color: AppColors.brightBlue, size: size),
+      errorBuilder: (_, __, ___) => Icon(Icons.blur_circular_rounded, color: AppColors.green, size: size),
     );
   }
 
@@ -495,9 +494,9 @@ class _AdminDashboardState extends State<AdminDashboard> {
                     IntrinsicHeight(
                       child: Row(
                         children: [
-                          Expanded(child: _statGradientCard(Icons.people_alt_rounded, loading ? "--" : "$totalEmployees", "Total Employees", const [AppColors.primary, AppColors.brightBlue])),
+                          Expanded(child: _statGradientCard(Icons.people_alt_rounded, loading ? "--" : "$totalEmployees", "Total Employees", const [AppColors.primary, AppColors.green])),
                           const SizedBox(width: 12),
-                          Expanded(child: _statGradientCard(Icons.verified_rounded, loading ? "--" : "$checkedInToday", "Checked In Today", const [AppColors.indigo, AppColors.violet])),
+                          Expanded(child: _statGradientCard(Icons.verified_rounded, loading ? "--" : "$checkedInToday", "Checked In Today", const [AppColors.info, AppColors.primary])),
                         ],
                       ),
                     ),
@@ -622,7 +621,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                   Icons.event_available_outlined,
                   "Leave Requests",
                   "Review and approve leave",
-                  AppColors.violet,
+                  AppColors.primary,
                   () => Navigator.push(context, MaterialPageRoute(builder: (_) => AdminLeaveScreen(adminId: widget.employeeId, adminName: widget.employeeName ?? widget.employeeId))),
                 ),
               ),
@@ -632,7 +631,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                   Icons.receipt_long_outlined,
                   "Payslip Requests",
                   "Review and issue payslips",
-                  AppColors.indigo,
+                  AppColors.info,
                   () async {
                     await Navigator.push(context, MaterialPageRoute(builder: (_) => AdminPayslipRequestsScreen(adminId: widget.employeeId, adminName: widget.employeeName ?? widget.employeeId)));
                     _loadPendingApprovals();
@@ -723,7 +722,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                     Icons.history_outlined,
                     'Admin Activity',
                     'Monitor administrative activity',
-                    AppColors.indigo,
+                    AppColors.info,
                     () => Navigator.push(
                       context,
                       MaterialPageRoute(builder: (_) => const AdminActivityLogScreen()),
