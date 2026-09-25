@@ -232,7 +232,7 @@ class _PayslipRequestScreenState extends State<PayslipRequestScreen> {
                       children: [
                         Container(
                           padding: const EdgeInsets.all(10),
-                          decoration: BoxDecoration(color: AppColors.primary.withOpacity(0.1), borderRadius: BorderRadius.circular(12)),
+                          decoration: BoxDecoration(color: AppColors.primary.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(12)),
                           child: const Icon(Icons.receipt_long_outlined, color: AppColors.primary, size: 18),
                         ),
                         const SizedBox(width: 12),
@@ -251,7 +251,7 @@ class _PayslipRequestScreenState extends State<PayslipRequestScreen> {
                         ),
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                          decoration: BoxDecoration(color: _statusColor(status).withOpacity(0.12), borderRadius: BorderRadius.circular(20)),
+                          decoration: BoxDecoration(color: _statusColor(status).withValues(alpha: 0.12), borderRadius: BorderRadius.circular(20)),
                           child: Text(_statusLabel(status), style: TextStyle(color: _statusColor(status), fontWeight: FontWeight.bold, fontSize: 11)),
                         ),
                         if (status == 'pending')

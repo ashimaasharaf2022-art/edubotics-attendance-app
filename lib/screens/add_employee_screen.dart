@@ -197,7 +197,7 @@ class _AddEmployeeScreenState extends State<AddEmployeeScreen> {
                 const SizedBox(width: 12),
                 Expanded(
                   child: DropdownButtonFormField<String>(
-                    value: _employmentType,
+                    initialValue: _employmentType,
                     decoration: InputDecoration(
                       labelText: "Type",
                       prefixIcon: const Icon(Icons.access_time_outlined),
@@ -306,4 +306,4 @@ class _AddEmployeeScreenState extends State<AddEmployeeScreen> {
       ),
     );
   }
-}
+}

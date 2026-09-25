@@ -553,7 +553,7 @@ class _PersonalReportScreenState extends State<PersonalReportScreen> {
         borderRadius: BorderRadius.circular(24),
         boxShadow: [
           BoxShadow(
-            color: green.withOpacity(0.18),
+            color: green.withValues(alpha: 0.18),
             blurRadius: 20,
             offset: const Offset(0, 9),
           ),
@@ -620,7 +620,7 @@ class _PersonalReportScreenState extends State<PersonalReportScreen> {
                       Text(
                         _weekdayShort(date.weekday),
                         style: TextStyle(
-                          color: Colors.white.withOpacity(0.72),
+                          color: Colors.white.withValues(alpha: 0.72),
                           fontSize: 9,
                           fontWeight: FontWeight.w700,
                         ),
@@ -632,12 +632,12 @@ class _PersonalReportScreenState extends State<PersonalReportScreen> {
                         decoration: BoxDecoration(
                           color: isToday
                               ? Colors.white
-                              : Colors.white.withOpacity(0.10),
+                              : Colors.white.withValues(alpha: 0.10),
                           shape: BoxShape.circle,
                           border: isToday
                               ? null
                               : Border.all(
-                                  color: Colors.white.withOpacity(0.12),
+                                  color: Colors.white.withValues(alpha: 0.12),
                                 ),
                         ),
                         alignment: Alignment.center,
@@ -667,7 +667,7 @@ class _PersonalReportScreenState extends State<PersonalReportScreen> {
                             ? '${hours.toStringAsFixed(1)}h'
                             : '--',
                         style: TextStyle(
-                          color: Colors.white.withOpacity(0.72),
+                          color: Colors.white.withValues(alpha: 0.72),
                           fontSize: 8,
                           fontWeight: FontWeight.w600,
                         ),
@@ -707,7 +707,7 @@ class _PersonalReportScreenState extends State<PersonalReportScreen> {
             child: LinearProgressIndicator(
               minHeight: 7,
               value: progress,
-              backgroundColor: Colors.white.withOpacity(0.13),
+              backgroundColor: Colors.white.withValues(alpha: 0.13),
               valueColor: const AlwaysStoppedAnimation<Color>(
                 Colors.white,
               ),
@@ -774,7 +774,7 @@ class _PersonalReportScreenState extends State<PersonalReportScreen> {
         color: background,
         borderRadius: BorderRadius.circular(17),
         border: Border.all(
-          color: color.withOpacity(0.12),
+          color: color.withValues(alpha: 0.12),
         ),
       ),
       child: Column(
@@ -846,13 +846,13 @@ class _PersonalReportScreenState extends State<PersonalReportScreen> {
         borderRadius: BorderRadius.circular(18),
         border: Border.all(
           color: isToday
-              ? green.withOpacity(0.35)
+              ? green.withValues(alpha: 0.35)
               : border,
           width: isToday ? 1.3 : 1,
         ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.025),
+            color: Colors.black.withValues(alpha: 0.025),
             blurRadius: 12,
             offset: const Offset(0, 5),
           ),

@@ -235,7 +235,7 @@ class _AdminLeaveScreenState extends State<AdminLeaveScreen> {
                                           Container(
                                             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                                             decoration: BoxDecoration(
-                                              color: _statusColor(status).withOpacity(0.12),
+                                              color: _statusColor(status).withValues(alpha: 0.12),
                                               borderRadius: BorderRadius.circular(20),
                                             ),
                                             child: Text(

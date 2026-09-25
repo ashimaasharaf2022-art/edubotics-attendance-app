@@ -56,6 +56,39 @@ class AppColors {
   static const Color successLight = Color(0xFFE7F6E9);
 
   // ============================================================
+  // CALENDAR STATUS COLORS
+  // ============================================================
+
+  // Present — soft green like the attendance calendar
+  static const Color calendarPresent = Color(0xFFE7F6EA);
+  static const Color calendarPresentText = Color(0xFF138A5B);
+
+  // Leave — soft warm amber
+  static const Color calendarLeave = Color(0xFFFFF2D9);
+  static const Color calendarLeaveText = Color(0xFFC48A19);
+
+  // Absent — soft red
+  static const Color calendarAbsent = Color(0xFFFDE9E9);
+  static const Color calendarAbsentText = Color(0xFFD95757);
+
+  // Pending — soft yellow
+  static const Color calendarPending = Color(0xFFFFF7DF);
+  static const Color calendarPendingText = Color(0xFFC49A2C);
+
+  // Neutral day / no attendance
+  static const Color calendarNeutral = Color(0xFFF0F3F1);
+  static const Color calendarNeutralText = Color(0xFF66736D);
+
+  // Today's highlighted circle
+  static const Color calendarTodayFill = Color(0xFFE7F6EA);
+  static const Color calendarTodayBorder = Color(0xFF0BA66B);
+  static const Color calendarTodayText = Color(0xFF0F5B3F);
+
+  // Calendar tile border and subtle shadow
+  static const Color calendarTileBorder = Color(0xFFE8EEEA);
+  static const Color calendarTileShadow = Color(0x12000000);
+
+  // ============================================================
   // WARNING / WORK-PENDING / MIS-PUNCH
   // ============================================================
 
@@ -104,7 +137,7 @@ class AppColors {
 class AppShadows {
   static List<BoxShadow> card = [
     BoxShadow(
-      color: Colors.black.withOpacity(0.035),
+      color: Colors.black.withValues(alpha: 0.035),
       blurRadius: 12,
       offset: const Offset(0, 4),
     ),
@@ -112,7 +145,7 @@ class AppShadows {
 
   static List<BoxShadow> hero = [
     BoxShadow(
-      color: AppColors.primary.withOpacity(0.16),
+      color: AppColors.primary.withValues(alpha: 0.16),
       blurRadius: 18,
       offset: const Offset(0, 7),
     ),
@@ -120,7 +153,7 @@ class AppShadows {
 
   static List<BoxShadow> floating = [
     BoxShadow(
-      color: Colors.black.withOpacity(0.14),
+      color: Colors.black.withValues(alpha: 0.14),
       blurRadius: 16,
       offset: const Offset(0, 7),
     ),
@@ -143,14 +176,18 @@ class AppGradients {
     ],
   );
 
-  // Dark green hero card
+  // Dark green punch card — keeps the Workora primary green,
+  // with a subtle transition into the main brand green.
   static const LinearGradient punchCard = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
     colors: [
-      Color(0xFF0F5B3F),
-      Color(0xFF0B6947),
+      AppColors.primaryDark,
+      AppColors.primary,
+      Color(0xFF0B7950),
+      AppColors.green,
     ],
+    stops: [0.0, 0.35, 0.72, 1.0],
   );
 
   // Workora branding

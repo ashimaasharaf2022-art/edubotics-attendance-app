@@ -599,6 +599,80 @@ class _AdminPunchoutRequestsScreenState
     return -1;
   }
 
+  Future<void> _refreshAttendanceSummary(String employeeId) async {
+    try {
+      final snapshot = await _database.child('Attendance').child(employeeId).get();
+      if (!snapshot.exists || snapshot.value is! Map) return;
+
+      final raw = Map<dynamic, dynamic>.from(snapshot.value as Map);
+      var outstandingMinutes = 0;
+      var availableOvertimeMinutes = 0;
+
+      for (final entry in raw.entries) {
+        if (entry.value is! Map) continue;
+        final record = _toMap(entry.value);
+
+        final status = record['status']?.toString().toUpperCase() ?? '';
+        if (status == 'MIS-PUNCH' ||
+            record['misPunch'] == true ||
+            record['mis_punch'] == true ||
+            record['attendanceStatus']?.toString().toUpperCase() == 'LEAVE') {
+          continue;
+        }
+
+        final sessions = _readSessions(record);
+        if (sessions.isEmpty) continue;
+
+        final calculatorSessions = <AttendanceSession>[];
+        var openSession = false;
+        for (final session in sessions) {
+          final punchIn = session['punchIn']?.toString().trim();
+          final punchOut = session['punchOut']?.toString().trim();
+          if (punchIn == null || punchIn.isEmpty) continue;
+          if (punchOut == null || punchOut.isEmpty) {
+            openSession = true;
+            break;
+          }
+          calculatorSessions.add(
+            AttendanceSession(punchIn: punchIn, punchOut: punchOut),
+          );
+        }
+
+        if (openSession || calculatorSessions.isEmpty) continue;
+
+        final calculation = AttendanceCalculator.calculateFromSessions(
+          calculatorSessions,
+          workFromHome: record['workFromHome'] == true,
+        );
+
+        final regularized =
+            int.tryParse(record['regularizedMinutes']?.toString() ?? '') ?? 0;
+        final odUsed =
+            int.tryParse(record['odUsedMinutes']?.toString() ?? '') ?? 0;
+
+        final rawMinutes = (calculation.netHours * 60).round();
+        final effectiveMinutes = rawMinutes + regularized;
+        final rawExtra = (calculation.extraHours * 60).round();
+        final remainingExtra = (rawExtra - odUsed).clamp(0, 1 << 30).toInt();
+
+        if (effectiveMinutes < AttendanceCalculator.requiredMinutes) {
+          outstandingMinutes +=
+              AttendanceCalculator.requiredMinutes - effectiveMinutes;
+        } else {
+          availableOvertimeMinutes += remainingExtra;
+        }
+      }
+
+      await _database.child('AttendanceSummary').child(employeeId).update({
+        'outstandingMinutes': outstandingMinutes,
+        'availableOvertimeMinutes': availableOvertimeMinutes,
+        'updatedAt': DateTime.now().toIso8601String(),
+      });
+    } catch (e) {
+      debugPrint('Could not refresh attendance summary: $e');
+    }
+  }
+
   // ===========================================================================
   // CORRECT MIS-PUNCH
   // ===========================================================================
@@ -1166,6 +1240,11 @@ class _AdminPunchoutRequestsScreenState
             calculation.netHours,
       });
 
+      // The day is now verified by the admin. Only after this point is its
+      // final shortfall/OD amount allowed into the employee's compensation
+      // summary.
+      await _refreshAttendanceSummary(employeeId);
+
       if (!mounted) {
         return;
       }
@@ -1333,8 +1412,8 @@ class _AdminPunchoutRequestsScreenState
                       decoration:
                           BoxDecoration(
                         color: Colors.orange
-                            .withOpacity(
-                          0.12,
+                            .withValues(
+                          alpha: 0.12,
                         ),
                         borderRadius:
                             BorderRadius.circular(

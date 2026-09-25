@@ -1,101 +1,146 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_database/firebase_database.dart';
+
 import '../utils/app_colors.dart';
 
+/// Changes the password stored in the existing RTDB /users/{employeeId}
+/// record used by the current login system.
+///
+/// This intentionally does not use Firebase Authentication because this app's
+/// current login flow validates the password from Realtime Database.
 class ChangePasswordScreen extends StatefulWidget {
   final String employeeId;
 
-  const ChangePasswordScreen({super.key, required this.employeeId});
+  const ChangePasswordScreen({
+    super.key,
+    required this.employeeId,
+  });
 
   @override
   State<ChangePasswordScreen> createState() => _ChangePasswordScreenState();
 }
 
 class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
-  final _currentController = TextEditingController();
-  final _newController = TextEditingController();
-  final _confirmController = TextEditingController();
+  late final DatabaseReference dbRef;
+
+  final currentController = TextEditingController();
+  final newController = TextEditingController();
+  final confirmController = TextEditingController();
 
   bool isSaving = false;
-  bool obscureCurrent = true;
-  bool obscureNew = true;
-  bool obscureConfirm = true;
+  bool hideCurrent = true;
+  bool hideNew = true;
+  bool hideConfirm = true;
 
   @override
   void initState() {
     super.initState();
+    dbRef = FirebaseDatabase.instanceFor(
+      app: Firebase.app(),
+      databaseURL:
+          'https://edubotics-attendance-default-rtdb.asia-southeast1.firebasedatabase.app',
+    ).ref();
   }
 
   @override
   void dispose() {
-    _currentController.dispose();
-    _newController.dispose();
-    _confirmController.dispose();
+    currentController.dispose();
+    newController.dispose();
+    confirmController.dispose();
     super.dispose();
   }
 
-  void _showMessage(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-  }
+  Future<void> _changePassword() async {
+    if (isSaving) return;
 
-  Future<void> _submit() async {
-    final current = _currentController.text.trim();
-    final newPass = _newController.text.trim();
-    final confirm = _confirmController.text.trim();
+    final current = currentController.text;
+    final newPassword = newController.text;
+    final confirm = confirmController.text;
 
-    if (current.isEmpty || newPass.isEmpty || confirm.isEmpty) {
-      _showMessage("Please fill in all fields");
+    if (current.isEmpty || newPassword.isEmpty || confirm.isEmpty) {
+      _message('Please fill in all password fields.');
       return;
     }
 
-    if (newPass.length < 6) {
-      _showMessage("New password must be at least 6 characters");
+    if (newPassword.length < 6) {
+      _message('New password must be at least 6 characters.');
       return;
     }
 
-    if (newPass != confirm) {
-      _showMessage("New password and confirmation do not match");
+    if (newPassword != confirm) {
+      _message('New password and confirmation do not match.');
       return;
     }
 
-    if (newPass == current) {
-      _showMessage("New password must be different from current password");
+    if (newPassword == current) {
+      _message('New password must be different from the current password.');
       return;
     }
 
     setState(() => isSaving = true);
 
     try {
-      final user = FirebaseAuth.instance.currentUser;
-      final email = user?.email;
-      if (user == null || email == null) {
-        throw StateError('Please sign in again before changing your password.');
+      final userRef = dbRef.child('users').child(widget.employeeId);
+      final snapshot = await userRef.get();
+
+      if (!snapshot.exists || snapshot.value is! Map) {
+        _message('Employee account was not found.');
+        return;
       }
 
-      await user.reauthenticateWithCredential(
-        EmailAuthProvider.credential(email: email, password: current),
+      final data = Map<dynamic, dynamic>.from(snapshot.value as Map);
+      final storedPassword = data['password']?.toString() ?? '';
+
+      if (storedPassword != current) {
+        _message('Current password is incorrect.');
+        return;
+      }
+
+      await userRef.update({'password': newPassword});
+
+      if (!mounted) return;
+
+      currentController.clear();
+      newController.clear();
+      confirmController.clear();
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Password changed successfully.')),
       );
-      await user.updatePassword(newPass);
-
-      if (!mounted) return;
-      setState(() => isSaving = false);
-      _showMessage("Password changed successfully");
-      Navigator.pop(context);
-    } on FirebaseAuthException catch (e) {
-      if (!mounted) return;
-      setState(() => isSaving = false);
-      if (e.code == 'wrong-password' || e.code == 'invalid-credential') {
-        _showMessage('Current password is incorrect');
-      } else if (e.code == 'requires-recent-login') {
-        _showMessage('Please sign out and sign in again, then retry.');
-      } else {
-        _showMessage(e.message ?? 'Unable to change password.');
-      }
     } catch (e) {
-      if (!mounted) return;
-      setState(() => isSaving = false);
-      _showMessage("Error : $e");
+      if (mounted) {
+        _message('Could not change password: $e');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => isSaving = false);
+      }
     }
+  }
+
+  void _message(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
+  InputDecoration _decoration({
+    required String label,
+    required IconData icon,
+    required VoidCallback onToggle,
+    required bool hidden,
+  }) {
+    return InputDecoration(
+      labelText: label,
+      prefixIcon: Icon(icon),
+      suffixIcon: IconButton(
+        tooltip: hidden ? 'Show password' : 'Hide password',
+        onPressed: onToggle,
+        icon: Icon(hidden ? Icons.visibility_outlined : Icons.visibility_off_outlined),
+      ),
+    );
   }
 
   @override
@@ -103,77 +148,107 @@ class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
-        backgroundColor: AppColors.primary,
-        title: const Text(
-          "Change Password",
-          style: TextStyle(color: Colors.white),
-        ),
+        title: const Text('Change Password'),
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            TextField(
-              controller: _currentController,
-              obscureText: obscureCurrent,
-              decoration: InputDecoration(
-                labelText: "Current Password",
-                prefixIcon: const Icon(Icons.lock_outline),
-                suffixIcon: IconButton(
-                  icon: Icon(obscureCurrent ? Icons.visibility_off : Icons.visibility),
-                  onPressed: () => setState(() => obscureCurrent = !obscureCurrent),
-                ),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-              ),
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
+          child: Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(22),
+              boxShadow: AppShadows.card,
             ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _newController,
-              obscureText: obscureNew,
-              decoration: InputDecoration(
-                labelText: "New Password",
-                prefixIcon: const Icon(Icons.lock),
-                suffixIcon: IconButton(
-                  icon: Icon(obscureNew ? Icons.visibility_off : Icons.visibility),
-                  onPressed: () => setState(() => obscureNew = !obscureNew),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text(
+                  'Update your password',
+                  style: TextStyle(
+                    color: AppColors.textPrimary,
+                    fontSize: 21,
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-              ),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _confirmController,
-              obscureText: obscureConfirm,
-              decoration: InputDecoration(
-                labelText: "Confirm New Password",
-                prefixIcon: const Icon(Icons.lock),
-                suffixIcon: IconButton(
-                  icon: Icon(obscureConfirm ? Icons.visibility_off : Icons.visibility),
-                  onPressed: () => setState(() => obscureConfirm = !obscureConfirm),
+                const SizedBox(height: 6),
+                Text(
+                  'Employee ID: ${widget.employeeId}',
+                  style: const TextStyle(
+                    color: AppColors.textSecondary,
+                    fontSize: 13,
+                  ),
                 ),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-              ),
-            ),
-            const SizedBox(height: 28),
-            SizedBox(
-              height: 52,
-              child: ElevatedButton(
-                style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
-                onPressed: isSaving ? null : _submit,
-                child: isSaving
-                    ? const SizedBox(
-                        height: 22,
-                        width: 22,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                      )
-                    : const Text(
-                        "UPDATE PASSWORD",
-                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                const SizedBox(height: 24),
+                TextField(
+                  controller: currentController,
+                  obscureText: hideCurrent,
+                  enabled: !isSaving,
+                  decoration: _decoration(
+                    label: 'Current password',
+                    icon: Icons.lock_outline_rounded,
+                    hidden: hideCurrent,
+                    onToggle: () => setState(() => hideCurrent = !hideCurrent),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: newController,
+                  obscureText: hideNew,
+                  enabled: !isSaving,
+                  decoration: _decoration(
+                    label: 'New password',
+                    icon: Icons.lock_reset_rounded,
+                    hidden: hideNew,
+                    onToggle: () => setState(() => hideNew = !hideNew),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: confirmController,
+                  obscureText: hideConfirm,
+                  enabled: !isSaving,
+                  onSubmitted: (_) => _changePassword(),
+                  decoration: _decoration(
+                    label: 'Confirm new password',
+                    icon: Icons.verified_user_outlined,
+                    hidden: hideConfirm,
+                    onToggle: () => setState(() => hideConfirm = !hideConfirm),
+                  ),
+                ),
+                const SizedBox(height: 22),
+                SizedBox(
+                  height: 52,
+                  child: ElevatedButton.icon(
+                    onPressed: isSaving ? null : _changePassword,
+                    icon: isSaving
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.check_rounded),
+                    label: Text(isSaving ? 'Updating...' : 'Change Password'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primary,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(15),
                       ),
-              ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  'The current Workora login system stores the password in the existing RTDB user record.',
+                  style: TextStyle(
+                    color: AppColors.textSecondary,
+                    fontSize: 11,
+                  ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );

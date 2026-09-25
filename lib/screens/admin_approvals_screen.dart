@@ -6,6 +6,7 @@ import '../utils/app_colors.dart';
 import '../utils/activity_logger.dart';
 import '../utils/notification_center.dart';
 import '../utils/attendance_calculator.dart';
+import 'admin_employee_attendance_view_screen.dart';
 
 class AdminApprovalsScreen extends StatefulWidget {
   final String adminId;
@@ -266,10 +267,31 @@ class _AdminApprovalsScreenState
   ///   4. Temporary automatic/MIS-PUNCH fields are removed.
   ///   5. 11:59 PM is NOT retained as the actual punch-out.
   ///   6. No punch-out GPS/location is invented.
+
+  Future<void> _viewPunchAttendance(
+    Map<String, dynamic> request,
+  ) async {
+    final employeeId = request['employeeId']?.toString() ?? '';
+    final date = request['date']?.toString() ?? '';
+    if (employeeId.isEmpty || date.isEmpty || !mounted) return;
+
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => AdminEmployeeAttendanceViewScreen(
+          employeeId: employeeId,
+          employeeName: request['employeeName']?.toString() ?? '',
+          focusDates: {date},
+        ),
+      ),
+    );
+  }
+
   Future<void> _reviewPunchRequest(
     Map<String, dynamic> request,
-    String decision,
-  ) async {
+    String decision, {
+    bool editTime = true,
+  }) async {
     final employeeId = request['employeeId']?.toString() ?? '';
     final date = request['date']?.toString() ?? '';
     if (employeeId.isEmpty || date.isEmpty) return;
@@ -277,21 +299,44 @@ class _AdminApprovalsScreenState
     TimeOfDay? selectedTime;
 
     if (decision == 'approved') {
-      final suggested = AttendanceCalculator.toMinutes(
+      final requestedMinutes = AttendanceCalculator.toMinutes(
+        request['actualPunchOutRequested']?.toString(),
+      );
+
+      final suggested = requestedMinutes ??
+          AttendanceCalculator.toMinutes(
             request['suggestedPunchOut']?.toString(),
           ) ??
           AttendanceCalculator.toMinutes('11:59 PM')!;
 
-      selectedTime = await showTimePicker(
-        context: context,
-        initialTime: TimeOfDay(
-          hour: suggested ~/ 60,
-          minute: suggested % 60,
-        ),
-        helpText: 'Select verified checkout time',
-      );
+      if (editTime) {
+        selectedTime = await showTimePicker(
+          context: context,
+          initialTime: TimeOfDay(
+            hour: suggested ~/ 60,
+            minute: suggested % 60,
+          ),
+          helpText: 'Edit / verify checkout time',
+        );
 
-      if (selectedTime == null) return;
+        if (selectedTime == null) return;
+      } else {
+        if (requestedMinutes == null) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('No punch-out time was submitted by the employee.'),
+              ),
+            );
+          }
+          return;
+        }
+
+        selectedTime = TimeOfDay(
+          hour: requestedMinutes ~/ 60,
+          minute: requestedMinutes % 60,
+        );
+      }
     }
 
     final selectedText = selectedTime?.format(context);
@@ -922,6 +967,14 @@ class _AdminApprovalsScreenState
                     'Check-in: ${item['punchIn'] ?? '--'} • No checkout recorded',
                     style: const TextStyle(color: AppColors.textSecondary),
                   ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Requested punch-out: ${item['actualPunchOutRequested'] ?? '--'}',
+                    style: const TextStyle(
+                      color: AppColors.primary,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
                   if (item['message'] != null &&
                       item['message'].toString().trim().isNotEmpty) ...[
                     const SizedBox(height: 6),
@@ -931,6 +984,15 @@ class _AdminApprovalsScreenState
                     ),
                   ],
                   const SizedBox(height: 10),
+                  OutlinedButton.icon(
+                    onPressed: () => _viewPunchAttendance(item),
+                    icon: const Icon(Icons.visibility_outlined, size: 16),
+                    label: const Text(
+                      'VIEW ATTENDANCE',
+                      style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
                   Row(
                     children: [
                       Expanded(
@@ -939,15 +1001,30 @@ class _AdminApprovalsScreenState
                           child: const Text('Reject'),
                         ),
                       ),
-                      const SizedBox(width: 10),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => _reviewPunchRequest(
+                            item,
+                            'approved',
+                            editTime: false,
+                          ),
+                          child: const Text('Approve'),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
                       Expanded(
                         child: ElevatedButton(
                           style: ElevatedButton.styleFrom(
                             backgroundColor: AppColors.success,
                           ),
-                          onPressed: () => _reviewPunchRequest(item, 'approved'),
+                          onPressed: () => _reviewPunchRequest(
+                            item,
+                            'approved',
+                            editTime: true,
+                          ),
                           child: const Text(
-                            'Verify & choose time',
+                            'Edit',
                             style: TextStyle(color: Colors.white),
                           ),
                         ),

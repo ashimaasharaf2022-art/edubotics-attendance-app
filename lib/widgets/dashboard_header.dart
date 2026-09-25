@@ -42,7 +42,7 @@ class DashboardHeader extends StatelessWidget {
         children: [
           CircleAvatar(
             radius: 26,
-            backgroundColor: AppColors.primary.withOpacity(0.12),
+            backgroundColor: AppColors.primary.withValues(alpha: 0.12),
             backgroundImage: avatarImage,
             child: avatarImage == null
                 ? const Icon(Icons.person, color: AppColors.primary, size: 26)

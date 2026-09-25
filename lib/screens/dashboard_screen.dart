@@ -10,22 +10,20 @@ import '../utils/location_helper.dart';
 import '../utils/time_integrity_helper.dart';
 import '../utils/work_schedule.dart';
 import '../utils/notification_center.dart';
+import '../utils/leave_constants.dart';
+import '../utils/email_alert_helper.dart';
 import '../utils/progress_painters.dart';
-import '../widgets/workora_logo.dart';
 import 'leave_screen.dart';
+import 'leave_request_bottom_sheet.dart';
+import 'wfh_request_bottom_sheet.dart';
 import 'notifications_screen.dart';
-import 'history_screen.dart';
 import 'personal_report_screen.dart';
 import 'announcement_detail_screen.dart';
-import 'payslip_request_screen.dart';
+import 'payslip_request_bottom_sheet.dart';
 import 'live_location_screen.dart';
-import 'profile_screen.dart';
 import 'account_settings_screen.dart';
-
-// Dark palette used only for this screen's hero header, to match the
-// reference design without changing the app's global light theme.
-const Color _kHeroDark1 = Color(0xFF0B0F1F);
-const Color _kHeroDark2 = Color(0xFF171B3D);
+import 'raise_ticket_bottom_sheet.dart';
+import 'history_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   final String employeeId;
@@ -49,10 +47,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   bool showHomeTab = false;
   bool? checkedInAsWfh;
+  // WFH approval gives permission; Office remains the default.
+  bool useWfhForNextPunch = false;
   bool isLoading = true;
   bool isSubmitting = false;
+  // Synchronous guard: prevents a second tap before Flutter rebuilds the button.
+  bool _punchActionLocked = false;
 
   Timer? _clockTimer;
+  StreamSubscription<DatabaseEvent>? _wfhStatusSubscription;
+  String? _lastObservedWfhStatus;
   DateTime _now = DateTime.now();
 
   String punchInTime = "--:--";
@@ -60,15 +64,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
   String status = "Not Checked In";
 
   List<AttendanceSession> _todaySessions = <AttendanceSession>[];
+  Map<dynamic, dynamic>? _todayAttendanceRecord;
 
   String workingHours = "0 hr 0 min";
   DayType? dayType;
 
   String? wfhStatusToday;
-
-  // Kept with the existing variable name so the rest of the dashboard
-  // continues to work without unrelated changes.
-  String? pendingAutoCheckoutDate;
 
   String? lunchBreakStart;
   String? lunchBreakEnd;
@@ -96,6 +97,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
       databaseURL:
           "https://edubotics-attendance-default-rtdb.asia-southeast1.firebasedatabase.app",
     ).ref();
+
+    // Keep the employee's WFH tab synchronized with the admin decision.
+    // The first event only initializes the local state; later approved/rejected
+    // changes are reflected immediately without reopening the dashboard.
+    _wfhStatusSubscription = dbRef
+        .child("WorkFromHomeRequests")
+        .child(widget.employeeId)
+        .child(getDateKey())
+        .onValue
+        .listen(_handleWfhStatusEvent);
 
     _clockTimer = Timer.periodic(
       const Duration(seconds: 1),
@@ -126,17 +137,82 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void dispose() {
     _clockTimer?.cancel();
+    _wfhStatusSubscription?.cancel();
     super.dispose();
   }
 
   void _openAccountSettings() {
     Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => AccountSettingsScreen(
-          employeeId: widget.employeeId,
-        ),
+      PageRouteBuilder(
+        opaque: false,
+        barrierDismissible: false,
+        barrierColor: Colors.transparent,
+        transitionDuration: const Duration(milliseconds: 220),
+        reverseTransitionDuration: const Duration(milliseconds: 180),
+        pageBuilder: (context, animation, secondaryAnimation) {
+          return AccountSettingsScreen(
+            employeeId: widget.employeeId,
+          );
+        },
+        transitionsBuilder:
+            (context, animation, secondaryAnimation, child) {
+          return FadeTransition(
+            opacity: CurvedAnimation(
+              parent: animation,
+              curve: Curves.easeOut,
+            ),
+            child: child,
+          );
+        },
       ),
     );
+  }
+
+  void _handleWfhStatusEvent(DatabaseEvent event) {
+    if (!mounted) return;
+
+    String? nextStatus;
+    final value = event.snapshot.value;
+    if (value is Map) {
+      final data = Map<dynamic, dynamic>.from(value);
+      nextStatus = data["status"]?.toString().toLowerCase();
+    }
+
+    final previous = _lastObservedWfhStatus;
+    _lastObservedWfhStatus = nextStatus;
+
+    setState(() {
+      wfhStatusToday = nextStatus;
+
+      // Approval gives permission to choose WFH; it does not automatically
+      // turn the next punch into WFH. Office remains the default.
+      if (nextStatus == "approved") {
+        useWfhForNextPunch = false;
+      }
+
+      if (nextStatus == "rejected") {
+        showHomeTab = false;
+        useWfhForNextPunch = false;
+      }
+    });
+
+    if (previous != null &&
+        previous != nextStatus &&
+        nextStatus == "approved") {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("WFH approved. You can now check in from home."),
+        ),
+      );
+    } else if (previous != null &&
+        previous != nextStatus &&
+        nextStatus == "rejected") {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("WFH request rejected. You can continue with Office attendance."),
+        ),
+      );
+    }
   }
 
   Future<void> _loadEmployeeInfo() async {
@@ -173,6 +249,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return "${date.year}-"
         "${date.month.toString().padLeft(2, '0')}-"
         "${date.day.toString().padLeft(2, '0')}";
+  }
+
+  bool _isWeekend(DateTime date) {
+    return date.weekday == DateTime.saturday ||
+        date.weekday == DateTime.sunday;
   }
 
   // User-facing dates are displayed as DD/MM/YY.
@@ -212,6 +293,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
       for (final entry in records.entries) {
         final dateKey = entry.key.toString();
+
+        final parsedDate = DateTime.tryParse(dateKey);
+        if (parsedDate != null && _isWeekend(parsedDate)) {
+          continue;
+        }
 
         // Never modify today's attendance.
         // Today's open session is still a legitimate Checked In state.
@@ -331,73 +417,34 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   // ---------------------------------------------------------------------------
-  // PENDING PUNCHOUT REQUEST
-  // ---------------------------------------------------------------------------
-
-  Future<void> _loadPendingPunchoutRequest() async {
-    try {
-      // The dashboard warning must represent the LATEST actual MIS-PUNCH
-      // attendance record, not an old pending PunchRequest.
-      //
-      // PunchRequests are created only when the employee sends the request
-      // from Attendance History. Therefore they are not used to decide which
-      // MIS-PUNCH date should be displayed here.
-      final snapshot = await dbRef
-          .child("Attendance")
-          .child(widget.employeeId)
-          .get();
-
-      if (!snapshot.exists || snapshot.value is! Map) {
-        if (mounted) {
-          setState(() => pendingAutoCheckoutDate = null);
-        }
-        return;
-      }
-
-      final records = Map<dynamic, dynamic>.from(snapshot.value as Map);
-      final todayKey = getDateKey();
-      String? latestMisPunchDate;
-
-      for (final entry in records.entries) {
-        final dateKey = entry.key.toString();
-
-        // Never show today's record in the previous-day MIS-PUNCH warning.
-        if (dateKey == todayKey || dateKey.compareTo(todayKey) > 0) {
-          continue;
-        }
-
-        if (entry.value is! Map) continue;
-
-        final record = Map<dynamic, dynamic>.from(entry.value as Map);
-        final recordStatus =
-            record["status"]?.toString().trim().toUpperCase();
-
-        if (recordStatus != "MIS-PUNCH") continue;
-
-        if (latestMisPunchDate == null ||
-            dateKey.compareTo(latestMisPunchDate!) > 0) {
-          latestMisPunchDate = dateKey;
-        }
-      }
-
-      if (mounted) {
-        setState(() {
-          pendingAutoCheckoutDate = latestMisPunchDate;
-        });
-      }
-    } catch (_) {
-      // Warning lookup must never stop the dashboard from loading.
-    }
-  }
-
-  // ---------------------------------------------------------------------------
   // TODAY ATTENDANCE
   // ---------------------------------------------------------------------------
 
   Future<void> _loadTodayAttendance() async {
-    try {
-      await _loadPendingPunchoutRequest();
+    if (_isWeekend(DateTime.now())) {
+      if (!mounted) return;
 
+      setState(() {
+        _todaySessions = <AttendanceSession>[];
+        _todayAttendanceRecord = null;
+        punchInTime = "--:--";
+        punchOutTime = "--:--";
+        status = "Weekly Off";
+        checkedInAsWfh = null;
+        wfhStatusToday = null;
+        useWfhForNextPunch = false;
+        lunchBreakStart = null;
+        lunchBreakEnd = null;
+        teaBreakStart = null;
+        teaBreakEnd = null;
+        dayType = null;
+        workingHours = "—";
+        isLoading = false;
+      });
+      return;
+    }
+
+    try {
       final snapshot = await dbRef
           .child("Attendance")
           .child(widget.employeeId)
@@ -409,6 +456,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       if (!snapshot.exists) {
         setState(() {
           _todaySessions = <AttendanceSession>[];
+          _todayAttendanceRecord = null;
 
           punchInTime = "--:--";
           punchOutTime = "--:--";
@@ -504,6 +552,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             !hasOpenSession;
 
         setState(() {
+          _todayAttendanceRecord = data;
           _todaySessions = sessions;
 
           punchInTime =
@@ -538,13 +587,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
           teaBreakEnd =
               data["teaBreakEnd"]?.toString();
 
-          if (data.containsKey("workFromHome") &&
-              sessions.isNotEmpty) {
-            checkedInAsWfh =
-                data["workFromHome"] == true;
-
-            showHomeTab =
-                checkedInAsWfh!;
+          if (sessions.isNotEmpty) {
+            // The current punch mode belongs to the LAST session. Do not use
+            // the day's top-level workFromHome flag for this because a day can
+            // contain Office -> WFH or WFH -> Office sessions.
+            checkedInAsWfh = _lastSessionIsWfh(data);
           }
 
           _updateClassification();
@@ -567,12 +614,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
         setState(() {
           wfhStatusToday =
-              wfhData["status"]?.toString();
+              wfhData["status"]?.toString().toLowerCase();
 
-          if (checkedInAsWfh == null &&
-              (wfhStatusToday == "approved" ||
-                  wfhStatusToday == "pending")) {
-            showHomeTab = true;
+          // Do not auto-select WFH merely because the request is approved.
+          // The employee chooses Office or WFH before the next punch.
+          if (wfhStatusToday != "approved") {
+            useWfhForNextPunch = false;
           }
         });
       }
@@ -672,6 +719,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
       !d.isAfter(lastDay);
       d = d.add(const Duration(days: 1))
     ) {
+      // Saturday and Sunday are weekly off days and are excluded from
+      // all attendance totals.
+      if (_isWeekend(d)) {
+        continue;
+      }
+
       final key = getDateKey(d);
 
       final record = allAttendance[key];
@@ -867,6 +920,34 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return lastPunchOut == null || lastPunchOut.trim().isEmpty;
   }
 
+  bool _lastSessionIsWfh(Map<dynamic, dynamic> record) {
+    final raw = record["sessions"];
+
+    if (raw is List && raw.isNotEmpty) {
+      final last = raw.last;
+      if (last is Map) {
+        return last["workFromHome"] == true ||
+            last["workLocationType"]?.toString().toLowerCase() ==
+                "work from home";
+      }
+    }
+
+    if (raw is Map && raw.isNotEmpty) {
+      final entries = raw.entries.toList()
+        ..sort(
+          (a, b) => a.key.toString().compareTo(b.key.toString()),
+        );
+      final last = entries.last.value;
+      if (last is Map) {
+        return last["workFromHome"] == true ||
+            last["workLocationType"]?.toString().toLowerCase() ==
+                "work from home";
+      }
+    }
+
+    return record["workFromHome"] == true;
+  }
+
   List<AttendanceSession> _sessionsFromRecord(
     Map<dynamic, dynamic> record,
   ) {
@@ -1033,7 +1114,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Future<void> _punchIn({
     required bool bypassGeofence,
   }) async {
-    if (isSubmitting) return;
+    if (_isWeekend(DateTime.now())) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("Saturday and Sunday are weekly off days."),
+          ),
+        );
+      }
+      return;
+    }
+
+    if (isSubmitting || _punchActionLocked) return;
+    _punchActionLocked = true;
 
     // Multiple sessions are allowed. The transaction below checks the actual
     // last session so a stale UI status can never block a valid re-check-in.
@@ -1050,8 +1143,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     if (currentLocation == null) {
       if (mounted) {
-        setState(() =>
-            isSubmitting = false);
+        setState(() {
+          isSubmitting = false;
+          _punchActionLocked = false;
+        });
 
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -1067,8 +1162,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     if (!await _passesIntegrityChecks()) {
       if (mounted) {
-        setState(() =>
-            isSubmitting = false);
+        setState(() {
+          isSubmitting = false;
+          _punchActionLocked = false;
+        });
       }
 
       return;
@@ -1109,19 +1206,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
           sessions.add({
             "punchIn": time,
-            "workFromHome":
-                bypassGeofence,
+            "workFromHome": bypassGeofence,
+            "workLocationType": bypassGeofence
+                ? "Work From Home"
+                : "Office",
             if (location != null) ...{
-              "punchInLat":
-                  location.latitude,
-              "punchInLng":
-                  location.longitude,
-              "punchInAddress":
-                  location.address,
+              "punchInLat": location.latitude,
+              "punchInLng": location.longitude,
+              "punchInAddress": location.address,
             },
-            if (bypassGeofence)
-              "workLocationType":
-                  "Work From Home",
           });
 
           data["employeeId"] =
@@ -1135,8 +1228,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
           data["punchIn"] = time;
           data["punchOut"] = null;
           data["status"] = "Checked In";
+          // Keep the legacy day-level flag true if ANY session was WFH.
+          // Session-level workFromHome remains the authoritative marker for
+          // mixed Office/WFH days.
           data["workFromHome"] =
-              bypassGeofence;
+              sessions.any((session) =>
+                  session["workFromHome"] == true ||
+                  session["workLocationType"]?.toString().toLowerCase() ==
+                      "work from home");
           data["shiftType"] =
               WorkSchedule.shiftName;
 
@@ -1191,7 +1290,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
       // after a previous completed session.
       await _loadTodayAttendance();
       if (mounted) {
-        setState(() => isSubmitting = false);
+        setState(() {
+          isSubmitting = false;
+          _punchActionLocked = false;
+        });
+      } else {
+        _punchActionLocked = false;
       }
 
       await NotificationCenter.sendAdmin(
@@ -1202,8 +1306,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
       );
     } catch (_) {
       if (mounted) {
-        setState(() =>
-            isSubmitting = false);
+        setState(() {
+          isSubmitting = false;
+          _punchActionLocked = false;
+        });
       }
     }
   }
@@ -1215,7 +1321,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Future<void> _punchOut({
     required bool bypassGeofence,
   }) async {
-    if (isSubmitting) return;
+    if (_isWeekend(DateTime.now())) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("Saturday and Sunday are weekly off days."),
+          ),
+        );
+      }
+      return;
+    }
+
+    if (isSubmitting || _punchActionLocked) return;
+    _punchActionLocked = true;
 
     // Do not trust the cached status string here. The transaction checks the
     // actual last session in Firebase, which prevents both stale-state bugs
@@ -1232,8 +1350,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     if (currentLocation == null) {
       if (mounted) {
-        setState(() =>
-            isSubmitting = false);
+        setState(() {
+          isSubmitting = false;
+          _punchActionLocked = false;
+        });
 
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -1249,8 +1369,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     if (!await _passesIntegrityChecks()) {
       if (mounted) {
-        setState(() =>
-            isSubmitting = false);
+        setState(() {
+          isSubmitting = false;
+          _punchActionLocked = false;
+        });
       }
 
       return;
@@ -1427,7 +1549,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
       await _loadTodayAttendance();
       await _loadMonthlyAttendance();
       if (mounted) {
-        setState(() => isSubmitting = false);
+        setState(() {
+          isSubmitting = false;
+          _punchActionLocked = false;
+        });
+      } else {
+        _punchActionLocked = false;
       }
 
       final attendance =
@@ -1437,47 +1564,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
         workFromHome:
             checkedInAsWfh ?? false,
       );
-
-      final requestsSnap =
-          await dbRef
-              .child('PunchRequests')
-              .child(widget.employeeId)
-              .get();
-
-      if (requestsSnap.exists) {
-        final requests =
-            Map<dynamic, dynamic>.from(
-          requestsSnap.value as Map,
-        );
-
-        String? pendingDate;
-
-        requests.forEach(
-          (dateKey, value) {
-            if (value is! Map) return;
-
-            final request =
-                Map<dynamic, dynamic>.from(
-              value,
-            );
-
-            if (request['type'] ==
-                    'mis_punch' &&
-                request['status'] ==
-                    'pending') {
-              pendingDate =
-                  dateKey.toString();
-            }
-          },
-        );
-
-        if (mounted) {
-          setState(() {
-            pendingAutoCheckoutDate =
-                pendingDate;
-          });
-        }
-      }
 
       await _updateCompensationBalance(
         date,
@@ -1490,8 +1576,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
       );
     } catch (_) {
       if (mounted) {
-        setState(() =>
-            isSubmitting = false);
+        setState(() {
+          isSubmitting = false;
+          _punchActionLocked = false;
+        });
       }
     }
   }
@@ -2001,29 +2089,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   await _refreshLocation();
                 },
                 child: ListView(
-                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
+                  padding: const EdgeInsets.fromLTRB(18, 10, 18, 24),
                   children: [
                     _buildHeader(),
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 14),
                     _buildGreeting(),
                     const SizedBox(height: 14),
                     _buildHeroCard(),
-                    const SizedBox(height: 18),
+                    const SizedBox(height: 16),
                     _buildWeeklyStrip(),
-                    const SizedBox(height: 14),
-                    _buildWorkedBreakCard(),
-                    const SizedBox(height: 12),
-                    _buildLeaveBalanceCard(),
-                    const SizedBox(height: 22),
+                    const SizedBox(height: 18),
                     _buildQuickActions(),
-                    const SizedBox(height: 12),
-                    _buildWorkModeSwitcher(),
                     const SizedBox(height: 16),
                     _buildPublishAnnouncementCard(),
-                    if (pendingAutoCheckoutDate != null) ...[
-                      const SizedBox(height: 14),
-                      _autoCheckoutBanner(),
-                    ],
                   ],
                 ),
               ),
@@ -2037,16 +2115,41 @@ class _DashboardScreenState extends State<DashboardScreen> {
   // ---------------------------------------------------------------------------
 
   Widget _buildHeader() {
-    final name = employeeName.isEmpty ? widget.employeeId : employeeName;
-
     return Row(
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         Expanded(
-          child: WorkoraLogo(
-            width: 168,
-            height: 48,
-            fit: BoxFit.contain,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Image.asset(
+                'assets/images/workora_logo.png',
+                width: 28,
+                height: 28,
+                fit: BoxFit.contain,
+                errorBuilder: (_, __, ___) => const Icon(
+                  Icons.blur_circular_rounded,
+                  color: AppColors.green,
+                  size: 28,
+                ),
+              ),
+              const SizedBox(width: 7),
+              Image.asset(
+                'assets/images/workora_text.png',
+                width: 86,
+                height: 28,
+                fit: BoxFit.contain,
+                errorBuilder: (_, __, ___) => const Text(
+                  'workora',
+                  style: TextStyle(
+                    color: AppColors.primary,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -.3,
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
         StreamBuilder<int>(
@@ -2062,275 +2165,381 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ),
               ),
               child: Container(
-                width: 44,
-                height: 44,
+                width: 42,
+                height: 42,
                 decoration: BoxDecoration(
                   color: Colors.white,
                   shape: BoxShape.circle,
+                  border: Border.all(color: AppColors.divider),
                   boxShadow: AppShadows.card,
                 ),
-                child: Badge(
-                  isLabelVisible: count > 0,
-                  label: Text('$count'),
-                  backgroundColor: AppColors.danger,
-                  child: const Icon(
-                    Icons.notifications_none_rounded,
-                    color: AppColors.textPrimary,
-                    size: 22,
-                  ),
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  alignment: Alignment.center,
+                  children: [
+                    const Icon(
+                      Icons.notifications_none_rounded,
+                      color: AppColors.textPrimary,
+                      size: 21,
+                    ),
+                    if (count > 0)
+                      Positioned(
+                        top: -5,
+                        right: -7,
+                        child: Container(
+                          constraints: const BoxConstraints(
+                            minWidth: 17,
+                            minHeight: 17,
+                          ),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 4,
+                            vertical: 1,
+                          ),
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: AppColors.danger,
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: Colors.white,
+                              width: 1.5,
+                            ),
+                          ),
+                          child: Text(
+                            count > 99 ? '99+' : '$count',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 9,
+                              fontWeight: FontWeight.w900,
+                              height: 1,
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
               ),
             );
           },
         ),
-        const SizedBox(width: 10),
+      ],
+    );
+  }
+
+  Widget _buildGreeting() {
+    final name = employeeName.isEmpty ? widget.employeeId : employeeName;
+    return Row(
+      children: [
         InkWell(
-          borderRadius: BorderRadius.circular(22),
+          borderRadius: BorderRadius.circular(24),
           onTap: _openAccountSettings,
           child: Container(
-            width: 44,
-            height: 44,
-            decoration: const BoxDecoration(
-              color: AppColors.primary,
+            width: 46,
+            height: 46,
+            decoration: BoxDecoration(
+              color: AppColors.lightGreen,
               shape: BoxShape.circle,
+              border: Border.all(color: AppColors.brightGreen, width: 2),
             ),
             alignment: Alignment.center,
             child: Text(
               _initials.isEmpty ? name.substring(0, 1).toUpperCase() : _initials,
               style: const TextStyle(
-                color: Colors.white,
+                color: AppColors.primary,
                 fontSize: 13,
                 fontWeight: FontWeight.w800,
               ),
             ),
           ),
         ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                _greeting,
+                style: const TextStyle(
+                  color: AppColors.textSecondary,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: AppColors.textPrimary,
+                  fontSize: 17,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+        ),
       ],
     );
   }
 
+  Widget _buildPunchLocationSelector() {
+    Widget option({
+      required IconData icon,
+      required String label,
+      required bool selected,
+      required VoidCallback onTap,
+    }) {
+      return Expanded(
+        child: InkWell(
+          onTap: isSubmitting || _hasOpenTodaySession ? null : onTap,
+          borderRadius: BorderRadius.circular(12),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 160),
+            height: 42,
+            decoration: BoxDecoration(
+              color: selected
+                  ? Colors.white
+                  : Colors.white.withOpacity(.12),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: selected ? Colors.white : Colors.white24,
+              ),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  icon,
+                  size: 16,
+                  color: selected ? AppColors.primary : Colors.white70,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  label,
+                  style: TextStyle(
+                    color: selected ? AppColors.primary : Colors.white70,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Row(
+      children: [
+        option(
+          icon: Icons.apartment_outlined,
+          label: 'Office',
+          selected: _hasOpenTodaySession ? checkedInAsWfh != true : !useWfhForNextPunch,
+          onTap: () => setState(() => useWfhForNextPunch = false),
+        ),
+        const SizedBox(width: 8),
+        option(
+          icon: Icons.home_work_outlined,
+          label: 'WFH',
+          selected: useWfhForNextPunch,
+          onTap: () => setState(() => useWfhForNextPunch = true),
+        ),
+      ],
+    );
+  }
 
   // ---------------------------------------------------------------------------
   // HERO CARD
   // ---------------------------------------------------------------------------
 
-  Widget _buildGreeting() {
-    final name = employeeName.isEmpty ? widget.employeeId : employeeName;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          _greeting,
-          style: const TextStyle(
-            color: AppColors.textSecondary,
-            fontSize: 13,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-        const SizedBox(height: 2),
-        Text(
-          name,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            color: AppColors.textPrimary,
-            fontSize: 19,
-            fontWeight: FontWeight.w800,
-          ),
-        ),
-      ],
-    );
-  }
-
   Widget _buildHeroCard() {
     final checkedIn = _hasOpenTodaySession;
-    final isMisPunch = status == 'MIS-PUNCH' && !checkedIn;
-    final isWfh = showHomeTab && wfhStatusToday == 'approved';
-    final minutes = _workingMinutesLive;
-    final workText = _formatMinutes(minutes);
+    final isWfh = checkedIn ? (checkedInAsWfh == true) : useWfhForNextPunch;
+    final workText = _formatMinutes(_workingMinutesLive);
     final todayLabel = DateFormat('EEE, dd MMM yyyy').format(_now);
+    final currentTime = DateFormat('hh:mm a').format(_now);
+    final teaBreakActive = teaBreakStart != null && teaBreakEnd == null;
+    final teaBreakLabel = teaBreakActive ? 'End break' : 'Start break';
 
     return Container(
-      padding: const EdgeInsets.fromLTRB(18, 18, 18, 18),
+      padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
       decoration: BoxDecoration(
-        color: AppColors.primary,
-        borderRadius: BorderRadius.circular(28),
+        gradient: AppGradients.punchCard,
+        borderRadius: BorderRadius.circular(24),
         boxShadow: AppShadows.hero,
       ),
       child: Column(
         children: [
           Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Expanded(
-                flex: 5,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      todayLabel,
-                      style: const TextStyle(
-                        color: Colors.white70,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 18),
-                    SizedBox(
-                      width: 118,
-                      height: 118,
-                      child: CustomPaint(
-                        painter: ShiftRingPainter(progress: _shiftProgress),
-                        child: Center(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                workText,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 19,
-                                  fontWeight: FontWeight.w800,
-                                ),
-                              ),
-                              const SizedBox(height: 2),
-                              const Text(
-                                'of 9h shift',
-                                style: TextStyle(
-                                  color: Colors.white70,
-                                  fontSize: 10,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
+              Text(
+                todayLabel,
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
                 ),
               ),
-              const SizedBox(width: 8),
-              Expanded(
-                flex: 6,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Hours worked today',
-                      style: const TextStyle(
-                        color: Colors.white70,
-                        fontSize: 12,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Container(
-                          width: 7,
-                          height: 7,
-                          decoration: BoxDecoration(
-                            color: isMisPunch
-                                ? AppColors.warning
-                                : checkedIn
-                                    ? AppColors.primary
-                                    : Colors.white54,
-                            shape: BoxShape.circle,
-                          ),
-                        ),
-                        const SizedBox(width: 7),
-                        Expanded(
-                          child: Text(
-                            isMisPunch
-                                ? 'MIS-PUNCH'
-                                : checkedIn
-                                    ? 'Checked in'
-                                    : 'Not checked in',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 18),
-                    if (isMisPunch)
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                        decoration: BoxDecoration(
-                          color: AppColors.warning.withOpacity(.20),
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                        child: const Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.pending_actions, color: Colors.white, size: 18),
-                            SizedBox(width: 7),
-                            Text(
-                              'Admin review pending',
-                              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
-                            ),
-                          ],
-                        ),
-                      )
-                    else
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton.icon(
-                          onPressed: isSubmitting
-                              ? null
-                              : () => checkedIn
-                                  ? _punchOut(bypassGeofence: isWfh)
-                                  : _punchIn(bypassGeofence: showHomeTab),
-                          icon: Icon(
-                            checkedIn ? Icons.logout_rounded : Icons.login_rounded,
-                            size: 18,
-                          ),
-                          label: Text(checkedIn ? 'Check out' : 'Check in'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: AppColors.primary,
-                            foregroundColor: AppColors.textPrimary,
-                            disabledBackgroundColor: AppColors.primary.withOpacity(.45),
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            elevation: 0,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(15),
-                            ),
-                          ),
-                        ),
-                      ),
-                  ],
+              Text(
+                currentTime,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
                 ),
               ),
             ],
           ),
-          if (checkedIn && (WorkSchedule.isLunchBreak || WorkSchedule.isTeaBreak)) ...[
+          // Show the Office/WFH selector BEFORE check-in only when
+          // today's WFH request has been approved.
+          //
+          // If WFH is not approved, the employee stays on the normal
+          // Office-only punch card.
+          if (!checkedIn && wfhStatusToday == 'approved') ...[
+            const SizedBox(height: 10),
+            _buildPunchLocationSelector(),
             const SizedBox(height: 12),
-            _buildBreakStatus(),
-          ],
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              const Icon(Icons.location_on_outlined, color: Colors.white, size: 16),
-              const SizedBox(width: 5),
-              Expanded(
-                child: Text(
-                  isWfh ? 'Work From Home' : (currentLocation?.address ?? 'Location unavailable'),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: Colors.white70, fontSize: 11),
+          ] else if (checkedIn) ...[
+            const SizedBox(height: 4),
+            Center(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(.14),
+                  borderRadius: BorderRadius.circular(18),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      isWfh ? Icons.home_work_rounded : Icons.apartment_rounded,
+                      size: 15,
+                      color: Colors.white70,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      isWfh ? 'WFH' : 'Office',
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              if (!isWfh) ...[
-                const Icon(Icons.verified_rounded, color: Color(0xFFA7F3D0), size: 15),
-                const SizedBox(width: 4),
-                const Text(
-                  'GPS Verified',
-                  style: TextStyle(color: Color(0xFFA7F3D0), fontSize: 10, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+          ] else
+            const SizedBox(height: 15),
+          const Text(
+            'HOURS WORKED TODAY',
+            style: TextStyle(
+              color: Colors.white70,
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+              letterSpacing: .8,
+            ),
+          ),
+          const SizedBox(height: 3),
+          Text(
+            workText,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 27,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                width: 6,
+                height: 6,
+                decoration: BoxDecoration(
+                  color: checkedIn ? AppColors.brightGreen : Colors.white38,
+                  shape: BoxShape.circle,
                 ),
-              ],
+              ),
+              const SizedBox(width: 6),
+              Text(
+                checkedIn ? 'Checked in' : 'Not checked in',
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: SizedBox(
+                  height: 46,
+                  child: ElevatedButton.icon(
+                    onPressed: !checkedIn || isSubmitting
+                        ? null
+                        : () => _recordBreak(
+                              isLunch: false,
+                              start: !teaBreakActive,
+                            ),
+                    icon: const Icon(Icons.coffee_rounded, size: 18),
+                    label: Text(teaBreakLabel),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.green,
+                      foregroundColor: Colors.white,
+                      disabledBackgroundColor: Colors.white12,
+                      disabledForegroundColor: Colors.white38,
+                      elevation: 0,
+                      shape: const RoundedRectangleBorder(
+                        borderRadius: BorderRadius.horizontal(
+                          left: Radius.circular(14),
+                          right: Radius.circular(6),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: SizedBox(
+                  height: 46,
+                  child: ElevatedButton.icon(
+                    onPressed: isSubmitting
+                        ? null
+                        : () => checkedIn
+                            ? _punchOut(bypassGeofence: checkedInAsWfh == true)
+                            : _punchIn(
+                                bypassGeofence:
+                                    wfhStatusToday == 'approved' &&
+                                        useWfhForNextPunch,
+                              ),
+                    icon: Icon(
+                      checkedIn ? Icons.logout_rounded : Icons.login_rounded,
+                      size: 18,
+                    ),
+                    label: Text(checkedIn ? 'Check out' : 'Check in'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.white,
+                      foregroundColor: AppColors.primary,
+                      disabledBackgroundColor: Colors.white60,
+                      disabledForegroundColor: AppColors.primary.withOpacity(.55),
+                      elevation: 0,
+                      shape: const RoundedRectangleBorder(
+                        borderRadius: BorderRadius.horizontal(
+                          left: Radius.circular(6),
+                          right: Radius.circular(14),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             ],
           ),
         ],
@@ -2861,21 +3070,31 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final start = DateTime(today.year, today.month, today.day).subtract(const Duration(days: 6));
     final days = List.generate(7, (i) => start.add(Duration(days: i)));
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            const Text('This week', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
-            Text('${DateFormat('d').format(start)} – ${DateFormat('d MMM').format(today)}', style: const TextStyle(fontSize: 11, color: AppColors.textSecondary)),
-          ],
-        ),
-        const SizedBox(height: 10),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
-          decoration: BoxDecoration(color: AppColors.lightGreen.withOpacity(.55), borderRadius: BorderRadius.circular(20)),
-          child: Row(
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 13, 12, 11),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppColors.divider),
+        boxShadow: AppShadows.card,
+      ),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'This week',
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: AppColors.textPrimary),
+              ),
+              Text(
+                '${DateFormat('d').format(start)} – ${DateFormat('d MMM').format(today)}',
+                style: const TextStyle(fontSize: 10, color: AppColors.textSecondary),
+              ),
+            ],
+          ),
+          const SizedBox(height: 9),
+          Row(
             children: days.map((date) {
               final key = getDateKey(date);
               final record = allAttendance[key];
@@ -2884,17 +3103,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
               return Expanded(child: _weekDay(date, state.label, state.color, isToday));
             }).toList(),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
   ({String label, Color color}) _weeklyStatus(Map<String, dynamic>? record, DateTime date, bool isToday) {
-    if (isToday) return (label: 'Today', color: AppColors.textPrimary);
+    if (_isWeekend(date)) {
+      return (label: 'Off', color: AppColors.calendarNeutralText);
+    }
+
+    if (isToday) return (label: 'Present', color: AppColors.success);
     if (record == null) return (label: 'Absent', color: AppColors.danger);
     final sessions = _sessionsFromRecord(record);
     if (record['status']?.toString().toUpperCase() == 'MIS-PUNCH') {
-      return (label: 'Pending', color: AppColors.warning);
+      return (label: 'Leave', color: AppColors.warning);
     }
     if (sessions.isEmpty || sessions.last.punchOut == null || sessions.last.punchOut!.trim().isEmpty) {
       return (label: 'Pending', color: AppColors.warning);
@@ -2906,24 +3129,115 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Widget _weekDay(DateTime date, String label, Color color, bool today) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(DateFormat('EEE').format(date), style: const TextStyle(fontSize: 10, color: AppColors.textSecondary, fontWeight: FontWeight.w600)),
-        const SizedBox(height: 6),
-        Container(
-          width: 36, height: 36,
-          decoration: BoxDecoration(
-            color: today ? AppColors.textPrimary : color.withOpacity(.12),
-            shape: BoxShape.circle,
-            border: today ? Border.all(color: AppColors.primary, width: 2) : null,
+    // Attendance calendar tile: each day is a soft rounded rectangle.
+    // Only today's date keeps the green circular outline from the reference UI.
+    final Color tileColor;
+    final Color numberColor;
+    final Color statusColor;
+
+    switch (label.toLowerCase()) {
+      case 'present':
+        tileColor = AppColors.calendarPresent;
+        numberColor = AppColors.calendarPresentText;
+        statusColor = AppColors.calendarPresentText;
+        break;
+      case 'leave':
+        tileColor = AppColors.calendarLeave;
+        numberColor = AppColors.calendarLeaveText;
+        statusColor = AppColors.calendarLeaveText;
+        break;
+      case 'pending':
+        tileColor = AppColors.calendarPending;
+        numberColor = AppColors.calendarPendingText;
+        statusColor = AppColors.calendarPendingText;
+        break;
+      case 'absent':
+        tileColor = AppColors.calendarAbsent;
+        numberColor = AppColors.calendarAbsentText;
+        statusColor = AppColors.calendarAbsentText;
+        break;
+      default:
+        tileColor = AppColors.calendarNeutral;
+        numberColor = AppColors.calendarNeutralText;
+        statusColor = AppColors.calendarNeutralText;
+    }
+
+    final effectiveTileColor = today ? AppColors.calendarTodayFill : tileColor;
+    final effectiveNumberColor = today ? AppColors.calendarTodayText : numberColor;
+    final effectiveStatusColor = today ? AppColors.calendarTodayText : statusColor;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 2),
+      child: Container(
+        height: 76,
+        padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 0),
+        decoration: BoxDecoration(
+          color: effectiveTileColor,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: today
+                ? AppColors.calendarTodayBorder
+                : AppColors.calendarTileBorder,
+            width: today ? 1.4 : 0.8,
           ),
-          alignment: Alignment.center,
-          child: Text('${date.day}', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: today ? Colors.white : color)),
+          boxShadow: today
+              ? null
+              : const [
+                  BoxShadow(
+                    color: AppColors.calendarTileShadow,
+                    blurRadius: 5,
+                    offset: Offset(0, 2),
+                  ),
+                ],
         ),
-        const SizedBox(height: 5),
-        Text(label, style: TextStyle(fontSize: 8, fontWeight: FontWeight.w700, color: today ? AppColors.textPrimary : color), textAlign: TextAlign.center),
-      ],
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              DateFormat('EEE').format(date),
+              style: const TextStyle(
+                fontSize: 9,
+                fontWeight: FontWeight.w700,
+                color: AppColors.textSecondary,
+              ),
+            ),
+            Container(
+              width: 30,
+              height: 30,
+              alignment: Alignment.center,
+              decoration: today
+                  ? BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: AppColors.calendarTodayBorder,
+                        width: 2,
+                      ),
+                    )
+                  : null,
+              child: Text(
+                '${date.day}',
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w900,
+                  height: 1,
+                  color: effectiveNumberColor,
+                ),
+              ),
+            ),
+            Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.clip,
+              style: TextStyle(
+                fontSize: 8,
+                fontWeight: FontWeight.w800,
+                color: effectiveStatusColor,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -2957,7 +3271,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
       onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => LeaveScreen(employeeId: widget.employeeId, employeeName: employeeName.isEmpty ? widget.employeeId : employeeName))),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
-        decoration: BoxDecoration(color: AppColors.successLight, borderRadius: BorderRadius.circular(18)),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [
+              AppColors.successLight,
+              AppColors.veryLightGreen,
+            ],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: BorderRadius.circular(18),
+        ),
         child: Row(children: [
           Container(width: 40, height: 40, decoration: BoxDecoration(color: AppColors.primary, borderRadius: BorderRadius.circular(12)), child: const Icon(Icons.edit_calendar_rounded, color: AppColors.textPrimary, size: 21)),
           const SizedBox(width: 12),
@@ -2994,7 +3318,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
           onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AnnouncementDetailScreen())),
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-            decoration: BoxDecoration(color: AppColors.primary, borderRadius: BorderRadius.circular(18)),
+            decoration: BoxDecoration(
+              gradient: AppGradients.brand,
+              borderRadius: BorderRadius.circular(18),
+            ),
             child: Row(children: [
               Container(width: 42, height: 42, decoration: BoxDecoration(color: Colors.white.withOpacity(.14), borderRadius: BorderRadius.circular(13)), child: const Icon(Icons.campaign_rounded, color: Colors.white, size: 21)),
               const SizedBox(width: 12),
@@ -3013,7 +3340,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Widget _buildWorkModeSwitcher() {
     final checkedIn = _hasOpenTodaySession;
-    final homeSelected = showHomeTab;
+    final homeSelected = useWfhForNextPunch;
 
     void blocked() {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -3032,7 +3359,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             label: 'Office',
             icon: Icons.apartment_outlined,
             selected: !homeSelected,
-            onTap: checkedIn && checkedInAsWfh == true ? blocked : () => setState(() => showHomeTab = false),
+            onTap: checkedIn ? blocked : () => setState(() => useWfhForNextPunch = false),
           ),
         ),
         const SizedBox(width: 10),
@@ -3041,7 +3368,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             label: 'Work from home',
             icon: Icons.home_work_outlined,
             selected: homeSelected,
-            onTap: checkedIn && checkedInAsWfh == false ? blocked : () => setState(() => showHomeTab = true),
+            onTap: checkedIn ? blocked : () => setState(() => useWfhForNextPunch = true),
           ),
         ),
       ],
@@ -3096,16 +3423,65 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ),
         const SizedBox(height: 12),
         _modernActionTile(
+          icon: Icons.home_work_outlined,
+          title: 'Work from home',
+          subtitle: wfhStatusToday == 'approved'
+              ? 'Approved — choose Office or WFH above'
+              : _hasOpenTodaySession
+                  ? 'Check out first to request WFH'
+                  : wfhStatusToday == 'pending'
+                      ? 'Waiting for admin approval'
+                      : wfhStatusToday == 'rejected'
+                          ? 'WFH rejected'
+                          : 'Request WFH approval',
+          subtitleColor: wfhStatusToday == 'approved'
+              ? AppColors.success
+              : _hasOpenTodaySession
+                  ? AppColors.textSecondary
+                  : wfhStatusToday == 'pending'
+                      ? AppColors.warning
+                      : wfhStatusToday == 'rejected'
+                          ? AppColors.danger
+                          : AppColors.textSecondary,
+          iconColor: wfhStatusToday == 'approved'
+              ? AppColors.success
+              : wfhStatusToday == 'pending'
+                  ? AppColors.warning
+                  : wfhStatusToday == 'rejected'
+                      ? AppColors.danger
+                      : AppColors.primary,
+          enabled: wfhStatusToday == 'approved' || !_hasOpenTodaySession,
+          onTap: () async {
+            if (wfhStatusToday == 'approved') {
+              setState(() => useWfhForNextPunch = true);
+              return;
+            }
+            if (wfhStatusToday == 'pending') {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Your WFH request is waiting for admin approval.'),
+                ),
+              );
+              return;
+            }
+            if (wfhStatusToday == 'rejected') {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('WFH was rejected. You can continue with normal Office attendance.'),
+                ),
+              );
+              return;
+            }
+            await _openWfhRequestSheet(name);
+          },
+        ),
+        const SizedBox(height: 10),
+        _modernActionTile(
           icon: Icons.calendar_month_outlined,
           title: 'Request leave',
           subtitle: 'Apply for leave',
           iconColor: AppColors.primary,
-          onTap: () => Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => LeaveScreen(employeeId: widget.employeeId, employeeName: name),
-            ),
-          ),
+          onTap: () => _openLeaveRequestSheet(name),
         ),
         const SizedBox(height: 10),
         _modernActionTile(
@@ -3113,10 +3489,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
           title: 'Request payslip',
           subtitle: 'View & download payslips',
           iconColor: AppColors.primary,
-          onTap: () => Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => PayslipRequestScreen(employeeId: widget.employeeId, employeeName: name),
+          onTap: () => showModalBottomSheet(
+            context: context,
+            isScrollControlled: true,
+            useSafeArea: true,
+            backgroundColor: Colors.transparent,
+            barrierColor: Colors.black.withOpacity(0.45),
+            enableDrag: true,
+            builder: (_) => PayslipRequestBottomSheet(
+              employeeId: widget.employeeId,
+              employeeName: name,
             ),
           ),
         ),
@@ -3132,18 +3514,199 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
+  Future<void> _openWfhRequestSheet(String name) async {
+    // Do the authoritative check again immediately before opening the sheet.
+    // This prevents a request if the employee checked in after the dashboard
+    // was rendered.
+    await _loadTodayAttendance();
+    if (!mounted || _hasOpenTodaySession) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('You cannot request Work From Home after checking in.'),
+          ),
+        );
+      }
+      return;
+    }
+
+    final result = await showModalBottomSheet<Map<String, dynamic>>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withOpacity(0.45),
+      enableDrag: true,
+      builder: (_) => WfhRequestBottomSheet(
+        employeeId: widget.employeeId,
+        employeeName: name,
+      ),
+    );
+
+    // The sheet has completely closed before we touch Firebase.
+    if (result == null || !mounted) return;
+
+    // Check again because the employee could have checked in while the sheet
+    // was open.
+    await _loadTodayAttendance();
+    if (!mounted || _hasOpenTodaySession) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('WFH request was not submitted because you checked in.'),
+          ),
+        );
+      }
+      return;
+    }
+
+    final date = getDateKey();
+    final reason = (result['reason'] as String?)?.trim() ?? '';
+    final resolvedName = name.isEmpty ? widget.employeeId : name;
+
+    // Do not create duplicate requests for the same employee/date.
+    final existingSnap = await dbRef
+        .child('WorkFromHomeRequests')
+        .child(widget.employeeId)
+        .child(date)
+        .get();
+
+    if (existingSnap.exists) {
+      final existingData = existingSnap.value is Map
+          ? Map<dynamic, dynamic>.from(existingSnap.value as Map)
+          : <dynamic, dynamic>{};
+
+      if (!mounted) return;
+      setState(() {
+        wfhStatusToday = existingData['status']?.toString();
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('A Work From Home request already exists for today.'),
+        ),
+      );
+      return;
+    }
+
+    try {
+      // Keep the existing WFH schema/path used by the admin approval screen.
+      final requestRef = dbRef
+          .child('WorkFromHomeRequests')
+          .child(widget.employeeId)
+          .child(date);
+
+      if (currentLocation == null) {
+        await _refreshLocation();
+      }
+      final location = currentLocation;
+
+      await requestRef.set({
+        'employeeId': widget.employeeId,
+        'employeeName': resolvedName,
+        'date': date,
+        'reason': reason,
+        'status': 'pending',
+        'requestedAt': DateTime.now().toIso8601String(),
+        if (location != null) 'latitude': location.latitude,
+        if (location != null) 'longitude': location.longitude,
+        if (location != null) 'address': location.address,
+      });
+
+      await NotificationCenter.sendAdmin(
+        title: 'Work From Home Request',
+        message:
+            '$resolvedName has requested to work from home today (${_formatDateForMessage(date)}). Reason: ${reason.isEmpty ? 'Not provided' : reason}',
+      );
+
+      if (!mounted) return;
+      setState(() => wfhStatusToday = 'pending');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Work From Home request submitted.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not submit WFH request: $e')),
+      );
+    }
+  }
+
+  Future<void> _openLeaveRequestSheet(String name) async {
+    final result = await showModalBottomSheet<Map<String, dynamic>>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withOpacity(0.45),
+      enableDrag: true,
+      builder: (_) => LeaveRequestBottomSheet(
+        employeeId: widget.employeeId,
+        employeeName: name,
+      ),
+    );
+
+    // The sheet has completely closed before we touch Firebase.
+    if (result == null || !mounted) return;
+
+    final leaveType = result['leaveType'] as String;
+    final fromDate = result['fromDate'] as DateTime;
+    final toDate = result['toDate'] as DateTime;
+    final numberOfDays = result['numberOfDays'] as int;
+    final reason = result['reason'] as String;
+    final resolvedName = name.isEmpty ? widget.employeeId : name;
+
+    try {
+      final requestRef = dbRef.child('LeaveRequests').child(widget.employeeId).push();
+      await requestRef.set({
+        'employeeId': widget.employeeId,
+        'employeeName': resolvedName,
+        'leaveType': leaveType,
+        'fromDate': DateFormat('yyyy-MM-dd').format(fromDate),
+        'toDate': DateFormat('yyyy-MM-dd').format(toDate),
+        'numberOfDays': numberOfDays,
+        'reason': reason,
+        'status': 'pending',
+        'appliedOn': DateFormat('yyyy-MM-dd').format(DateTime.now()),
+      });
+
+      await NotificationCenter.sendAdmin(
+        title: 'New Leave Request',
+        message: '$resolvedName has requested ${LeaveConstants.displayName(leaveType)} from ${DateFormat('dd MMM yyyy').format(fromDate)} to ${DateFormat('dd MMM yyyy').format(toDate)}.',
+      );
+
+      await EmailAlertHelper.sendAlert(
+        templateId: EmailAlertHelper.templateLeaveRequest,
+        subject: 'New Leave Request — $resolvedName',
+        message: '$resolvedName (${widget.employeeId}) has requested ${LeaveConstants.displayName(leaveType)} from ${DateFormat('dd MMM yyyy').format(fromDate)} to ${DateFormat('dd MMM yyyy').format(toDate)} ($numberOfDays day(s)).\n\nReason: $reason\n\nOpen the app to approve or reject this request.',
+      );
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Leave request submitted')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e')),
+      );
+    }
+  }
+
   Widget _modernActionTile({
     required IconData icon,
     required String title,
     required String subtitle,
     required Color iconColor,
     required VoidCallback onTap,
+    Color subtitleColor = AppColors.textSecondary,
+    bool enabled = true,
   }) {
     return Material(
-      color: Colors.white,
+      color: enabled ? Colors.white : AppColors.background,
       borderRadius: BorderRadius.circular(18),
       child: InkWell(
-        onTap: onTap,
+        onTap: enabled ? onTap : null,
         borderRadius: BorderRadius.circular(18),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
@@ -3157,10 +3720,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 width: 42,
                 height: 42,
                 decoration: BoxDecoration(
-                  color: AppColors.lightGreen,
+                  gradient: LinearGradient(
+                    colors: [
+                      AppColors.lightGreen,
+                      AppColors.veryLightGreen,
+                    ],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
                   borderRadius: BorderRadius.circular(13),
                 ),
-                child: Icon(icon, color: iconColor, size: 21),
+                child: Icon(
+                  icon,
+                  color: enabled ? iconColor : AppColors.mutedText,
+                  size: 21,
+                ),
               ),
               const SizedBox(width: 13),
               Expanded(
@@ -3169,7 +3743,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   children: [
                     Text(title, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
                     const SizedBox(height: 3),
-                    Text(subtitle, style: const TextStyle(fontSize: 11, color: AppColors.textSecondary)),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: enabled ? subtitleColor : AppColors.textSecondary,
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -3182,73 +3762,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _showHelpdeskDialog() async {
-    final subjectController = TextEditingController();
-    final messageController = TextEditingController();
-
-    final submitted = await showDialog<bool>(
+    await showModalBottomSheet<void>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Raise a ticket'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: subjectController,
-                decoration: const InputDecoration(labelText: 'Subject', hintText: 'What do you need help with?'),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: messageController,
-                minLines: 3,
-                maxLines: 5,
-                decoration: const InputDecoration(labelText: 'Message'),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('CANCEL')),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('SEND'),
-          ),
-        ],
-      ),
+      isScrollControlled: true,
+      useSafeArea: true,
+      enableDrag: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black54,
+      builder: (sheetContext) {
+        return RaiseTicketBottomSheet(
+          employeeId: widget.employeeId,
+          employeeName:
+              employeeName.isEmpty ? widget.employeeId : employeeName,
+        );
+      },
     );
-
-    if (submitted != true || !mounted) return;
-
-    final subject = subjectController.text.trim();
-    final message = messageController.text.trim();
-    if (subject.isEmpty || message.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please enter both subject and message.')));
-      return;
-    }
-
-    try {
-      final requestRef = dbRef.child('HelpdeskRequests').child(widget.employeeId).push();
-      await requestRef.set({
-        'employeeId': widget.employeeId,
-        'employeeName': employeeName.isEmpty ? widget.employeeId : employeeName,
-        'subject': subject,
-        'message': message,
-        'status': 'pending',
-        'createdAt': DateTime.now().toIso8601String(),
-      });
-      await NotificationCenter.sendAdmin(
-        title: 'New Helpdesk Ticket',
-        message: '${employeeName.isEmpty ? widget.employeeId : employeeName} raised a helpdesk ticket: $subject',
-      );
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Helpdesk ticket sent.')));
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Unable to send ticket: $e')));
-    } finally {
-      subjectController.dispose();
-      messageController.dispose();
-    }
   }
 
 
@@ -3376,10 +3904,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final items =
         <_ActivityItem>[];
 
-    final isWfh =
-        showHomeTab &&
-            wfhStatusToday ==
-                "approved";
+    final sessionMaps = _sessionMapsFromRecord(_todayAttendanceRecord ?? {});
 
     for (
       int i = 0;
@@ -3388,6 +3913,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
     ) {
       final session =
           _todaySessions[i];
+      final sessionMap =
+          i < sessionMaps.length ? sessionMaps[i] : <String, dynamic>{};
+      final isWfh =
+          sessionMap["workFromHome"] == true ||
+          sessionMap["workLocationType"]?.toString().toLowerCase() ==
+              "work from home";
 
       items.add(
         _ActivityItem(
@@ -3841,66 +4372,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   // MIS-PUNCH BANNER
   // ---------------------------------------------------------------------------
 
-  Widget _autoCheckoutBanner() =>
-      Container(
-        padding:
-            const EdgeInsets.all(
-          14,
-        ),
-        decoration:
-            BoxDecoration(
-          color: AppColors.warning
-              .withOpacity(.14),
-          borderRadius:
-              BorderRadius.circular(
-            14,
-          ),
-          border:
-              Border.all(
-            color: AppColors.warning
-                .withOpacity(.45),
-          ),
-        ),
-        child: Row(
-          children: [
-            const Icon(
-              Icons
-                  .pending_actions,
-              color:
-                  AppColors.warning,
-            ),
-
-            const SizedBox(
-              width: 10,
-            ),
-
-            Expanded(
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => HistoryScreen(
-                        employeeId: widget.employeeId,
-                      ),
-                    ),
-                  );
-                },
-                child: Text(
-                  'MIS-PUNCH detected for ${_formatDateForMessage(pendingAutoCheckoutDate)}. Tap here to open Attendance History and use the existing punch-out request workflow.',
-                  style:
-                      const TextStyle(
-                    fontSize: 12,
-                    fontWeight:
-                        FontWeight.w600,
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      );
-
   Widget _announcementTitleList(
     List<Map<String, String>>
         announcements,
@@ -3914,8 +4385,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ),
       decoration:
           BoxDecoration(
-        gradient:
-            AppGradients.brand,
+        color:
+            AppColors.primary,
         borderRadius:
             BorderRadius.circular(
           22,
@@ -4075,8 +4546,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ),
       decoration:
           BoxDecoration(
-        gradient:
-            AppGradients.brand,
+        color:
+            AppColors.primary,
         borderRadius:
             BorderRadius.circular(
           22,

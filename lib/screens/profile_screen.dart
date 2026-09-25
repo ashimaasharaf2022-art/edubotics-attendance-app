@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -14,6 +13,7 @@ import '../utils/app_colors.dart';
 import '../utils/app_constants.dart';
 import '../utils/session_manager.dart';
 import '../utils/activity_logger.dart';
+import '../utils/workora_app_settings.dart';
 import 'login_screens.dart';
 
 /// Profile screen used for both:
@@ -21,8 +21,8 @@ import 'login_screens.dart';
 /// 2. an admin/superadmin viewing an employee profile
 ///
 /// Rules implemented here:
-/// - Admin/superadmin can edit company information.
-/// - Admin/superadmin can edit Employee ID, Name, Designation, joining date,
+/// - Admin/HR/Super Admin can edit company information.
+/// - Admin/HR/Super Admin can edit Employee ID, Name, Designation, joining date,
 ///   employment type, work location, official work email and account status.
 /// - Admin/superadmin CANNOT edit profile picture or personal/contact details.
 /// - Employee can edit their own personal/contact details and profile picture.
@@ -78,6 +78,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   String? loggedInEmpId;
   bool loggedInUserIsAdmin = false;
   bool loggedInUserIsSuperAdmin = false;
+  bool loggedInUserIsHr = false;
 
   final _nameController = TextEditingController();
   final _employeeIdController = TextEditingController();
@@ -132,30 +133,30 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return loggedInUserIsSuperAdmin;
   }
 
-  /// Only admin/superadmin can edit company information.
+  /// Admin, HR and Super Admin can edit management-controlled work details.
   bool get _canEditCompanyDetails {
     if (widget.viewOnly) return false;
-    return loggedInUserIsAdmin;
+    return loggedInUserIsAdmin || loggedInUserIsSuperAdmin || loggedInUserIsHr;
   }
 
-  /// Employees can edit their own personal/contact information.
-  /// Admins are deliberately excluded when they are editing another
-  /// employee's profile.
+  /// Personal details can be edited on the employee's own profile.
+  /// Management can also edit an employee's personal details.
   bool get _canEditPersonalDetails {
     if (widget.viewOnly) return false;
-    return _isViewingSelf && !loggedInUserIsAdmin;
+    return _isViewingSelf || _canEditCompanyDetails;
   }
 
-  /// Employee name is admin-managed.
+  /// Employee name and Employee ID are management-controlled.
   bool get _canEditName {
     if (widget.viewOnly) return false;
-    return loggedInUserIsAdmin;
+    return _canEditCompanyDetails;
   }
 
-  /// Profile picture is a personal detail. Admins cannot change it.
+  /// Profile picture is employee-owned and can only be changed by the
+  /// employee viewing their own profile.
   bool get _canEditPhoto {
     if (widget.viewOnly) return false;
-    return _isViewingSelf && !loggedInUserIsAdmin;
+    return _isViewingSelf;
   }
 
   @override
@@ -195,15 +196,28 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
       final normalizedRole = (role ?? '').trim().toLowerCase();
 
+      final hr = <String>{
+        'hr',
+        'humanresources',
+        'human_resources',
+        'human-resources',
+        'human resources',
+      }.contains(normalizedRole);
+
       final superAdmin =
           widget.isSuperAdmin ||
           widget.viewerIsSuperAdmin ||
           normalizedRole == 'superadmin';
 
+      // IMPORTANT: `hasAdminAccess` only controls whether an employee
+      // can switch to the Admin Panel. It must NOT grant permission to
+      // edit work/company details while the employee is still on the
+      // Employee Dashboard/Profile. Work details can be edited only when
+      // this ProfileScreen is opened from the actual Admin/HR/Superadmin
+      // management context.
       final admin =
           widget.isAdmin ||
           widget.viewerIsAdmin ||
-          widget.hasAdminAccess ||
           superAdmin ||
           normalizedRole == 'admin';
 
@@ -212,6 +226,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       setState(() {
         loggedInEmpId = empId;
         loggedInUserIsSuperAdmin = superAdmin;
+        loggedInUserIsHr = hr;
         loggedInUserIsAdmin = admin;
       });
 
@@ -424,6 +439,21 @@ class _ProfileScreenState extends State<ProfileScreen> {
     setState(() {
       pickedPhotoBytes = bytes;
     });
+
+    try {
+      await dbRef.child('users').child(_employeeId).update({
+        'photoBase64': base64Encode(bytes),
+      });
+      if (!mounted) return;
+      setState(() {
+        profile['photoBase64'] = base64Encode(bytes);
+        pickedPhotoBytes = null;
+      });
+      _showMessage('Profile picture updated successfully.');
+    } catch (e) {
+      if (!mounted) return;
+      _showMessage('Unable to update profile picture: $e');
+    }
   }
 
   Future<void> _selectDateOfJoining() async {
@@ -1099,115 +1129,1670 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   @override
-  Widget build(
-    BuildContext context,
-  ) {
+  Widget build(BuildContext context) {
     if (loading) {
       return const Scaffold(
-        backgroundColor:
-            AppColors.background,
-        body: Center(
-          child:
-              CircularProgressIndicator(),
-        ),
+        backgroundColor: AppColors.background,
+        body: Center(child: CircularProgressIndicator()),
       );
     }
 
-    final role =
-        (profile['role']
-                    ?.toString() ??
-                'employee')
-            .trim()
-            .toLowerCase();
+    final avatarImage = _getAvatarImage();
+    final name = profile['name']?.toString().trim().isNotEmpty == true
+        ? profile['name'].toString().trim()
+        : _employeeId;
+    final designation = _designationController.text.trim().isEmpty
+        ? 'Team Member'
+        : _designationController.text.trim();
+    final department = profile['department']?.toString().trim().isNotEmpty == true
+        ? profile['department'].toString().trim()
+        : 'Not specified';
+    final reportingManager = profile['reportingManager']?.toString().trim().isNotEmpty == true
+        ? profile['reportingManager'].toString().trim()
+        : (profile['managerName']?.toString().trim().isNotEmpty == true
+            ? profile['managerName'].toString().trim()
+            : 'Not specified');
+    final workLocation = _workLocationController.text.trim().isEmpty
+        ? 'Not specified'
+        : _workLocationController.text.trim();
 
-    final isSuper =
-        role == 'superadmin';
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      body: SafeArea(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final contentWidth = constraints.maxWidth > 520
+                ? 520.0
+                : constraints.maxWidth;
 
-    final isAdmin =
-        role == 'admin' &&
-        profile['adminAccess'] == true;
+            return Center(
+              child: SizedBox(
+                width: contentWidth,
+                child: RefreshIndicator(
+                  onRefresh: _loadProfile,
+                  child: SingleChildScrollView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: const EdgeInsets.fromLTRB(18, 8, 18, 28),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        const Center(
+                          child: Text(
+                            'Profile',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w800,
+                              color: AppColors.textPrimary,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 22),
+                        _buildProfileIdentity(
+                          name: name,
+                          designation: designation,
+                          avatarImage: avatarImage,
+                        ),
+                        const SizedBox(height: 28),
 
-    final isActive =
-        _status == 'active';
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            _profileSectionTitle('PERSONAL PROFILE'),
+                            if (_canEditPersonalDetails)
+                              TextButton.icon(
+                                onPressed: saving ? null : _openPersonalEditScreen,
+                                icon: const Icon(Icons.edit_rounded, size: 17),
+                                label: const Text('Edit'),
+                                style: TextButton.styleFrom(
+                                  foregroundColor: AppColors.primary,
+                                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                                  minimumSize: Size.zero,
+                                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                  textStyle: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        _buildProfileInfoCard([
+                          _profileInfoRow(
+                            'Phone',
+                            _phoneController.text.trim().isEmpty
+                                ? 'Not provided'
+                                : _phoneController.text.trim(),
+                            Icons.phone_outlined,
+                          ),
+                          _profileInfoRow(
+                            'Personal email',
+                            _personalEmailController.text.trim().isEmpty
+                                ? 'Not provided'
+                                : _personalEmailController.text.trim(),
+                            Icons.mail_outline_rounded,
+                          ),
+                          _profileInfoRow(
+                            'Address',
+                            _addressController.text.trim().isEmpty
+                                ? 'Not provided'
+                                : _addressController.text.trim(),
+                            Icons.location_on_outlined,
+                          ),
+                          _profileInfoRow(
+                            'Emergency contact',
+                            _emergencyContactController.text.trim().isEmpty
+                                ? 'Not provided'
+                                : _emergencyContactController.text.trim(),
+                            Icons.phone_in_talk_outlined,
+                            isLast: true,
+                          ),
+                        ]),
 
-    return PopScope(
-      canPop: true,
-      child: Scaffold(
-        backgroundColor:
-            AppColors.background,
-        appBar: AppBar(
-          title: Text(
-            _isViewingSelf
-                ? 'My Profile'
-                : 'Employee Profile',
-          ),
-          actions: <Widget>[
-            if (_canEditCompanyDetails ||
-                _canEditPersonalDetails)
-              IconButton(
-                icon: Icon(
-                  editing
-                      ? Icons.check
-                      : Icons.edit_outlined,
+                        const SizedBox(height: 26),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            _profileSectionTitle('WORK PROFILE'),
+                            if (_canEditCompanyDetails)
+                              TextButton.icon(
+                                onPressed: saving ? null : _openWorkEditScreen,
+                                icon: const Icon(Icons.edit_rounded, size: 17),
+                                label: const Text('Edit'),
+                                style: TextButton.styleFrom(
+                                  foregroundColor: AppColors.primary,
+                                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                                  minimumSize: Size.zero,
+                                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                  textStyle: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        _buildProfileInfoCard([
+                          _profileInfoRow(
+                            'Employee ID',
+                            _employeeId,
+                            Icons.badge_outlined,
+                          ),
+                          _profileInfoRow(
+                            'Department',
+                            department,
+                            Icons.account_tree_outlined,
+                          ),
+                          _profileInfoRow(
+                            'Designation',
+                            designation,
+                            Icons.business_center_outlined,
+                          ),
+                          _profileInfoRow(
+                            'Reporting manager',
+                            reportingManager,
+                            Icons.groups_outlined,
+                          ),
+                          _profileInfoRow(
+                            'Date of joining',
+                            _formatJoiningDate(_dateOfJoining),
+                            Icons.calendar_month_outlined,
+                          ),
+                          _profileInfoRow(
+                            'Work location',
+                            workLocation,
+                            Icons.location_on_outlined,
+                            isLast: true,
+                          ),
+                        ]),
+                        const SizedBox(height: 14),
+                        _buildAssignedAssetsSection(),
+                        const SizedBox(height: 8),
+                        const Center(
+                          child: Text(
+                            'Managed by HR — contact support to update',
+                            style: TextStyle(
+                              fontSize: 9,
+                              color: AppColors.mutedText,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+
+                        const SizedBox(height: 24),
+                        _profileSectionTitle('SUPPORT & PREFERENCES'),
+                        const SizedBox(height: 8),
+                        _buildSettingsCard(),
+                        const SizedBox(height: 14),
+                        _buildLogoutButton(),
+                        const SizedBox(height: 12),
+                        Center(
+                          child: Text(
+                            'Workora v1.0 · Build 2026.09.14',
+                            style: const TextStyle(
+                              fontSize: 9,
+                              color: AppColors.mutedText,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
-                tooltip: editing
-                    ? 'Save Changes'
-                    : 'Edit Profile',
-                onPressed: saving
-                    ? null
-                    : () {
-                        if (editing) {
-                          _save();
-                        } else {
-                          setState(() {
-                            editing =
-                                true;
-                          });
-                        }
-                      },
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildProfileTopBar() {
+    return Row(
+      children: [
+        Image.asset(
+          'assets/images/workora_logo.png',
+          width: 25,
+          height: 25,
+          fit: BoxFit.contain,
+          errorBuilder: (_, _, _) => const Icon(Icons.eco_rounded, color: AppColors.primary, size: 24),
+        ),
+        const SizedBox(width: 6),
+        Image.asset(
+          'assets/images/workora_text.png',
+          width: 68,
+          fit: BoxFit.contain,
+          errorBuilder: (_, _, _) => const Text(
+            'workora',
+            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: AppColors.primary),
+          ),
+        ),
+        const Spacer(),
+        const Text(
+          'HRMS',
+          style: TextStyle(
+            fontSize: 8,
+            letterSpacing: 1.1,
+            color: AppColors.mutedText,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(width: 8),
+        InkWell(
+          onTap: () {},
+          borderRadius: BorderRadius.circular(22),
+          child: Container(
+            width: 32,
+            height: 32,
+            decoration: BoxDecoration(
+              color: AppColors.surface,
+              shape: BoxShape.circle,
+              border: Border.all(color: AppColors.divider),
+            ),
+            child: const Icon(Icons.dark_mode_outlined, size: 17, color: AppColors.textPrimary),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildProfileIdentity({
+    required String name,
+    required String designation,
+    required ImageProvider<Object>? avatarImage,
+  }) {
+    return Column(
+      children: [
+        GestureDetector(
+          onTap: _canEditPhoto ? _pickPhoto : null,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Container(
+                width: 116,
+                height: 116,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: const Color(0xFFFFB88B),
+                  border: Border.all(color: Colors.white, width: 4),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.10),
+                      blurRadius: 10,
+                      offset: const Offset(0, 3),
+                    ),
+                  ],
+                ),
+                child: CircleAvatar(
+                  backgroundColor: Colors.transparent,
+                  backgroundImage: avatarImage,
+                  child: avatarImage == null
+                      ? Text(
+                          _initials,
+                          style: const TextStyle(
+                            color: Color(0xFF7C3F20),
+                            fontSize: 38,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        )
+                      : null,
+                ),
+              ),
+              if (_canEditPhoto)
+                Positioned(
+                  right: -1,
+                  bottom: -1,
+                  child: Container(
+                    width: 32,
+                    height: 32,
+                    decoration: const BoxDecoration(
+                      color: AppColors.primary,
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.camera_alt_rounded,
+                      color: Colors.white,
+                      size: 17,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 14),
+        Text(
+          name,
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+            fontSize: 22,
+            fontWeight: FontWeight.w800,
+            color: AppColors.textPrimary,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          designation,
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+            fontSize: 13,
+            color: AppColors.textSecondary,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(height: 10),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(color: AppColors.divider),
+          ),
+          child: Text(
+            'Employee ID: $_employeeId',
+            style: const TextStyle(
+              fontSize: 11,
+              color: AppColors.mutedText,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _profileSectionTitle(String title) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 2),
+      child: Text(
+        title,
+        style: const TextStyle(
+          fontSize: 10,
+          letterSpacing: .8,
+          color: AppColors.mutedText,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildProfileInfoCard(List<Widget> rows) {
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(17),
+        border: Border.all(color: AppColors.divider),
+      ),
+      child: Column(children: rows),
+    );
+  }
+
+  Widget _profileInfoRow(
+    String label,
+    String value,
+    IconData icon, {
+    bool isLast = false,
+  }) {
+    return Container(
+      constraints: const BoxConstraints(minHeight: 58),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        border: isLast
+            ? null
+            : const Border(
+                bottom: BorderSide(
+                  color: AppColors.divider,
+                  width: .7,
+                ),
+              ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(11),
+            ),
+            child: Icon(
+              icon,
+              color: AppColors.primary,
+              size: 20,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              label,
+              style: const TextStyle(
+                fontSize: 12,
+                color: AppColors.mutedText,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Flexible(
+            flex: 2,
+            child: Text(
+              value,
+              textAlign: TextAlign.right,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontSize: 12,
+                color: AppColors.textPrimary,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatJoiningDate(String raw) {
+    if (raw.trim().isEmpty) return 'Not specified';
+    try {
+      final parsed = DateTime.parse(raw);
+      return DateFormat('d MMM yyyy').format(parsed);
+    } catch (_) {
+      return raw;
+    }
+  }
+
+  List<Map<String, dynamic>> _getAssignedAssets() {
+    final raw = profile['assets'];
+    if (raw is! Map) return <Map<String, dynamic>>[];
+
+    final assets = <Map<String, dynamic>>[];
+    raw.forEach((key, value) {
+      if (value is Map) {
+        final asset = <String, dynamic>{};
+        value.forEach((assetKey, assetValue) {
+          asset[assetKey.toString()] = assetValue;
+        });
+        asset['_key'] = key.toString();
+        assets.add(asset);
+      }
+    });
+    return assets;
+  }
+
+  String _assetValue(Map<String, dynamic> asset, String key,
+      [String fallback = 'Not specified']) {
+    final value = asset[key];
+    if (value == null || value.toString().trim().isEmpty) return fallback;
+    return value.toString().trim();
+  }
+
+  IconData _assetIcon(String type) {
+    switch (type.toLowerCase()) {
+      case 'laptop':
+      case 'computer':
+        return Icons.laptop_mac_rounded;
+      case 'desktop':
+        return Icons.desktop_windows_rounded;
+      case 'mobile':
+      case 'phone':
+        return Icons.phone_android_rounded;
+      case 'tablet':
+        return Icons.tablet_android_rounded;
+      case 'monitor':
+        return Icons.monitor_rounded;
+      case 'keyboard':
+        return Icons.keyboard_rounded;
+      case 'mouse':
+        return Icons.mouse_rounded;
+      case 'headset':
+        return Icons.headset_mic_rounded;
+      case 'id card':
+      case 'id card / badge':
+        return Icons.badge_rounded;
+      default:
+        return Icons.inventory_2_outlined;
+    }
+  }
+
+  Widget _buildAssignedAssetsSection() {
+    final assets = _getAssignedAssets();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            _profileSectionTitle('ASSIGNED ASSETS'),
+            if (_canEditCompanyDetails)
+              TextButton.icon(
+                onPressed: saving ? null : () => _showAssetEditor(),
+                icon: const Icon(Icons.add_rounded, size: 17),
+                label: const Text('Add'),
+                style: TextButton.styleFrom(
+                  foregroundColor: AppColors.primary,
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  textStyle: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
               ),
           ],
         ),
-        body: SafeArea(
-          child: saving
-              ? const Center(
-                  child:
-                      CircularProgressIndicator(),
-                )
-              : RefreshIndicator(
-                  onRefresh:
-                      _loadProfile,
-                  child: ListView(
-                    physics:
-                        const AlwaysScrollableScrollPhysics(),
-                    padding:
-                        const EdgeInsets.only(
-                      bottom: 30,
+        const SizedBox(height: 8),
+        if (assets.isEmpty)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
+            decoration: BoxDecoration(
+              color: AppColors.surface,
+              borderRadius: BorderRadius.circular(17),
+              border: Border.all(color: AppColors.divider),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    color: AppColors.primary.withValues(alpha: .08),
+                    borderRadius: BorderRadius.circular(11),
+                  ),
+                  child: const Icon(
+                    Icons.inventory_2_outlined,
+                    color: AppColors.primary,
+                    size: 20,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                const Expanded(
+                  child: Text(
+                    'No company assets assigned.',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: AppColors.mutedText,
+                      fontWeight: FontWeight.w600,
                     ),
-                    children: <Widget>[
-                      _buildHeroHeader(
-                        _getAvatarImage(),
-                        isSuper,
-                        isAdmin,
-                        isActive,
+                  ),
+                ),
+              ],
+            ),
+          )
+        else
+          Column(
+            children: [
+              for (int i = 0; i < assets.length; i++) ...[
+                _buildAssetCard(assets[i]),
+                if (i != assets.length - 1) const SizedBox(height: 8),
+              ],
+            ],
+          ),
+      ],
+    );
+  }
+
+  Widget _buildAssetCard(Map<String, dynamic> asset) {
+    final type = _assetValue(asset, 'type', 'Asset');
+    final name = _assetValue(asset, 'name', 'Unnamed asset');
+    final assetId = _assetValue(asset, 'assetId');
+    final serial = _assetValue(asset, 'serialNumber');
+    final assignedDate = _assetValue(asset, 'assignedDate');
+    final status = _assetValue(asset, 'status', 'Assigned');
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(12, 12, 8, 12),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(17),
+        border: Border.all(color: AppColors.divider),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: .09),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(
+              _assetIcon(type),
+              color: AppColors.primary,
+              size: 21,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: AppColors.textPrimary,
+                          fontWeight: FontWeight.w800,
+                        ),
                       ),
-                      const SizedBox(
-                        height: 16,
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 7,
+                        vertical: 3,
                       ),
-                      _buildCompanyInfoCard(),
-                      const SizedBox(
-                        height: 16,
+                      decoration: BoxDecoration(
+                        color: AppColors.primary.withValues(alpha: .09),
+                        borderRadius: BorderRadius.circular(20),
                       ),
-                      _buildPersonalInfoCard(),
-                      const SizedBox(
-                        height: 16,
+                      child: Text(
+                        status,
+                        style: const TextStyle(
+                          fontSize: 8,
+                          color: AppColors.primary,
+                          fontWeight: FontWeight.w800,
+                        ),
                       ),
-                      _buildActionSections(),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  type,
+                  style: const TextStyle(
+                    fontSize: 9,
+                    color: AppColors.mutedText,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 5,
+                  children: [
+                    if (assetId != 'Not specified')
+                      _assetMeta('Asset ID', assetId),
+                    if (serial != 'Not specified')
+                      _assetMeta('Serial No.', serial),
+                    if (assignedDate != 'Not specified')
+                      _assetMeta(
+                        'Assigned',
+                        _formatJoiningDate(assignedDate),
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          if (_canEditCompanyDetails)
+            PopupMenuButton<String>(
+              icon: const Icon(
+                Icons.more_vert_rounded,
+                size: 19,
+                color: AppColors.mutedText,
+              ),
+              padding: EdgeInsets.zero,
+              onSelected: (value) {
+                if (value == 'edit') {
+                  _showAssetEditor(asset: asset);
+                } else if (value == 'delete') {
+                  _removeAsset(asset);
+                }
+              },
+              itemBuilder: (_) => const [
+                PopupMenuItem(
+                  value: 'edit',
+                  child: Text('Edit asset'),
+                ),
+                PopupMenuItem(
+                  value: 'delete',
+                  child: Text('Remove asset'),
+                ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _assetMeta(String label, String value) {
+    return RichText(
+      text: TextSpan(
+        style: const TextStyle(
+          fontSize: 9,
+          color: AppColors.mutedText,
+        ),
+        children: [
+          TextSpan(
+            text: '$label: ',
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+          TextSpan(
+            text: value,
+            style: const TextStyle(
+              color: AppColors.textPrimary,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showAssetEditor({Map<String, dynamic>? asset}) async {
+    if (!_canEditCompanyDetails) return;
+
+    final typeController = TextEditingController(
+      text: _assetValue(asset ?? <String, dynamic>{}, 'type', 'Laptop'),
+    );
+    final nameController = TextEditingController(
+      text: _assetValue(asset ?? <String, dynamic>{}, 'name', ''),
+    );
+    final assetIdController = TextEditingController(
+      text: _assetValue(asset ?? <String, dynamic>{}, 'assetId', ''),
+    );
+    final serialController = TextEditingController(
+      text: _assetValue(asset ?? <String, dynamic>{}, 'serialNumber', ''),
+    );
+    final dateController = TextEditingController(
+      text: _assetValue(
+        asset ?? <String, dynamic>{},
+        'assignedDate',
+        DateFormat('yyyy-MM-dd').format(DateTime.now()),
+      ),
+    );
+    final notesController = TextEditingController(
+      text: _assetValue(asset ?? <String, dynamic>{}, 'notes', ''),
+    );
+    String status = _assetValue(
+      asset ?? <String, dynamic>{},
+      'status',
+      'Assigned',
+    );
+    bool savingAsset = false;
+
+    try {
+      final result = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) {
+          return StatefulBuilder(
+            builder: (_, setDialogState) {
+              return AlertDialog(
+                title: Text(
+                  asset == null ? 'Add Asset' : 'Edit Asset',
+                ),
+                content: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _assetDialogField(
+                        typeController,
+                        'Asset type',
+                        Icons.category_outlined,
+                      ),
+                      _assetDialogField(
+                        nameController,
+                        'Asset name / model',
+                        Icons.inventory_2_outlined,
+                      ),
+                      _assetDialogField(
+                        assetIdController,
+                        'Asset ID',
+                        Icons.qr_code_2_rounded,
+                      ),
+                      _assetDialogField(
+                        serialController,
+                        'Serial number',
+                        Icons.numbers_rounded,
+                      ),
+                      _assetDialogField(
+                        dateController,
+                        'Assigned date (YYYY-MM-DD)',
+                        Icons.calendar_today_outlined,
+                      ),
+                      DropdownButtonFormField<String>(
+                        value: const ['Assigned', 'Returned', 'Repair', 'Lost']
+                                .contains(status)
+                            ? status
+                            : 'Assigned',
+                        decoration: const InputDecoration(
+                          labelText: 'Status',
+                          prefixIcon: Icon(Icons.info_outline_rounded),
+                        ),
+                        items: const [
+                          'Assigned',
+                          'Returned',
+                          'Repair',
+                          'Lost',
+                        ].map((value) {
+                          return DropdownMenuItem(
+                            value: value,
+                            child: Text(value),
+                          );
+                        }).toList(),
+                        onChanged: savingAsset
+                            ? null
+                            : (value) {
+                                if (value != null) {
+                                  setDialogState(() => status = value);
+                                }
+                              },
+                      ),
+                      const SizedBox(height: 12),
+                      _assetDialogField(
+                        notesController,
+                        'Notes (optional)',
+                        Icons.notes_rounded,
+                        maxLines: 3,
+                      ),
                     ],
                   ),
                 ),
+                actions: [
+                  TextButton(
+                    onPressed: savingAsset
+                        ? null
+                        : () => Navigator.of(dialogContext).pop(false),
+                    child: const Text('Cancel'),
+                  ),
+                  FilledButton(
+                    onPressed: savingAsset
+                        ? null
+                        : () async {
+                            final name = nameController.text.trim();
+                            if (name.isEmpty) {
+                              _showDialogMessage(
+                                dialogContext,
+                                'Asset name / model is required.',
+                              );
+                              return;
+                            }
+
+                            setDialogState(() => savingAsset = true);
+
+                            try {
+                              final assetsRef = dbRef
+                                  .child('users')
+                                  .child(_employeeId)
+                                  .child('assets');
+                              final key = asset?['_key']?.toString() ??
+                                  assetsRef.push().key;
+
+                              if (key == null || key.isEmpty) {
+                                throw Exception('Could not create asset ID.');
+                              }
+
+                              await assetsRef.child(key).set({
+                                'type': typeController.text.trim().isEmpty
+                                    ? 'Asset'
+                                    : typeController.text.trim(),
+                                'name': name,
+                                'assetId': assetIdController.text.trim(),
+                                'serialNumber': serialController.text.trim(),
+                                'assignedDate': dateController.text.trim(),
+                                'status': status,
+                                'notes': notesController.text.trim(),
+                                'updatedAt': ServerValue.timestamp,
+                              });
+
+                              if (!mounted) return;
+                              Navigator.of(dialogContext).pop(true);
+                            } catch (e) {
+                              setDialogState(() => savingAsset = false);
+                              _showDialogMessage(
+                                dialogContext,
+                                'Could not save asset: $e',
+                              );
+                            }
+                          },
+                    child: Text(asset == null ? 'Add Asset' : 'Save Changes'),
+                  ),
+                ],
+              );
+            },
+          );
+        },
+      );
+
+      if (result == true && mounted) {
+        await _loadProfile();
+        _showMessage(
+          asset == null
+              ? 'Asset added successfully.'
+              : 'Asset updated successfully.',
+        );
+      }
+    } finally {
+      typeController.dispose();
+      nameController.dispose();
+      assetIdController.dispose();
+      serialController.dispose();
+      dateController.dispose();
+      notesController.dispose();
+    }
+  }
+
+  Widget _assetDialogField(
+    TextEditingController controller,
+    String label,
+    IconData icon, {
+    int maxLines = 1,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: TextField(
+        controller: controller,
+        maxLines: maxLines,
+        decoration: InputDecoration(
+          labelText: label,
+          prefixIcon: Icon(icon),
+          border: const OutlineInputBorder(),
         ),
       ),
+    );
+  }
+
+  void _showDialogMessage(BuildContext dialogContext, String message) {
+    ScaffoldMessenger.of(dialogContext).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
+  Future<void> _removeAsset(Map<String, dynamic> asset) async {
+    if (!_canEditCompanyDetails) return;
+
+    final key = asset['_key']?.toString();
+    if (key == null || key.isEmpty) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Remove asset?'),
+          content: Text(
+            'Remove ${_assetValue(asset, 'name', 'this asset')} from this employee?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Remove'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    try {
+      await dbRef
+          .child('users')
+          .child(_employeeId)
+          .child('assets')
+          .child(key)
+          .remove();
+
+      await _loadProfile();
+      if (mounted) {
+        _showMessage('Asset removed successfully.');
+      }
+    } catch (e) {
+      if (mounted) {
+        _showMessage('Could not remove asset: $e');
+      }
+    }
+  }
+
+  Future<void> _openPersonalEditScreen() async {
+    final result = await Navigator.of(context).push<Map<String, String>>(
+      MaterialPageRoute(
+        builder: (_) => _PersonalDetailsEditScreen(
+          phone: _phoneController.text,
+          personalEmail: _personalEmailController.text,
+          address: _addressController.text,
+          emergencyContact: _emergencyContactController.text,
+          bloodGroup: _bloodGroup,
+        ),
+      ),
+    );
+
+    if (result == null || !mounted) return;
+    await _savePersonalDetails(result);
+  }
+
+  Future<void> _openWorkEditScreen() async {
+    if (!_canEditCompanyDetails) return;
+
+    final result = await Navigator.of(context).push<Map<String, String>>(
+      MaterialPageRoute(
+        builder: (_) => _WorkDetailsEditScreen(
+          employeeId: _employeeIdController.text,
+          name: _nameController.text,
+          designation: _designationController.text,
+          workLocation: _workLocationController.text,
+          officialEmail: _workEmailController.text,
+          dateOfJoining: _dateOfJoining,
+          employmentType: _employmentType,
+        ),
+      ),
+    );
+
+    if (result == null || !mounted) return;
+    await _saveWorkDetails(result);
+  }
+
+  Future<void> _savePersonalDetails(Map<String, String> values) async {
+    if (saving) return;
+
+    setState(() => saving = true);
+    try {
+      await dbRef.child('users').child(_employeeId).update({
+        'phone': values['phone'] ?? '',
+        'personalEmail': values['personalEmail'] ?? '',
+        'address': values['address'] ?? '',
+        'emergencyContact': values['emergencyContact'] ?? '',
+        'bloodGroup': values['bloodGroup'] ?? _bloodGroup,
+      });
+
+      await _loadProfile();
+      if (!mounted) return;
+      setState(() => saving = false);
+      _showMessage('Personal details updated successfully.');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => saving = false);
+      _showMessage('Error updating personal details: $e');
+    }
+  }
+
+  Future<void> _saveWorkDetails(Map<String, String> values) async {
+    if (saving || !_canEditCompanyDetails) return;
+
+    final newEmployeeId = (values['employeeId'] ?? '').trim();
+    if (newEmployeeId.isEmpty) {
+      _showMessage('Employee ID cannot be empty.');
+      return;
+    }
+    if (!_isValidFirebaseKey(newEmployeeId)) {
+      _showMessage(
+        'Employee ID contains invalid characters. Use letters, numbers, _ or -.',
+      );
+      return;
+    }
+
+    setState(() => saving = true);
+    try {
+      final oldEmployeeId = _employeeId;
+      final updates = <String, dynamic>{
+        'employeeId': newEmployeeId,
+        'name': (values['name'] ?? '').trim(),
+        'designation': (values['designation'] ?? '').trim(),
+        'place': (values['workLocation'] ?? '').trim(),
+        'workLocation': (values['workLocation'] ?? '').trim(),
+        'email': (values['officialEmail'] ?? '').trim(),
+        'dateOfJoining': values['dateOfJoining'] ?? '',
+        'employmentType': values['employmentType'] ?? _employmentType,
+      };
+
+      if (profile.containsKey('status')) {
+        updates['status'] = profile['status'];
+      }
+      if (profile.containsKey('adminAccess')) {
+        updates['adminAccess'] = profile['adminAccess'];
+      }
+
+      if (oldEmployeeId != newEmployeeId) {
+        await _changeEmployeeId(
+          oldEmployeeId: oldEmployeeId,
+          newEmployeeId: newEmployeeId,
+          updates: updates,
+        );
+      } else {
+        await dbRef.child('users').child(oldEmployeeId).update(updates);
+      }
+
+      await _loadProfile();
+
+      final adminId = widget.viewerAdminId ?? loggedInEmpId;
+      if (adminId != null && adminId.isNotEmpty) {
+        await ActivityLogger.log(
+          adminId: adminId,
+          adminName: widget.viewerAdminName ?? 'Admin',
+          action: 'Updated Employee Work Profile',
+          details: '${_nameController.text.trim()} ($_employeeId)',
+        );
+      }
+
+      if (!mounted) return;
+      setState(() => saving = false);
+      _showMessage('Work details updated successfully.');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => saving = false);
+      _showMessage('Error updating work details: $e');
+    }
+  }
+
+  Widget _buildEditPanel() {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.greenBorder),
+      ),
+      child: Column(
+        children: [
+          if (_canEditPersonalDetails) ...[
+            _compactEditField('Phone', _phoneController),
+            _compactEditField('Personal email', _personalEmailController),
+            _compactEditField('Address', _addressController),
+            _compactEditField('Emergency contact', _emergencyContactController),
+          ],
+          if (_canEditCompanyDetails) ...[
+            _compactEditField('Employee ID', _employeeIdController),
+            _compactEditField('Name', _nameController),
+            _compactEditField('Designation', _designationController),
+            _compactEditField('Work location', _workLocationController),
+            _compactEditField('Official email', _workEmailController),
+          ],
+          const SizedBox(height: 4),
+          SizedBox(
+            width: double.infinity,
+            height: 40,
+            child: FilledButton(
+              onPressed: saving ? null : _save,
+              style: FilledButton.styleFrom(
+                backgroundColor: AppColors.green,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              child: saving
+                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  : const Text('Save changes', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _compactEditField(String label, TextEditingController controller) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 9),
+      child: TextField(
+        controller: controller,
+        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+        decoration: InputDecoration(
+          labelText: label,
+          labelStyle: const TextStyle(fontSize: 10),
+          filled: true,
+          fillColor: AppColors.background,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(11), borderSide: BorderSide(color: AppColors.divider)),
+          enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(11), borderSide: BorderSide(color: AppColors.divider)),
+          focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(11), borderSide: BorderSide(color: AppColors.green)),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSettingsCard() {
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(17),
+        border: Border.all(color: AppColors.divider),
+      ),
+      child: Column(
+        children: [
+          _settingsRow(
+            icon: Icons.headset_mic_outlined,
+            iconBg: AppColors.veryLightGreen,
+            iconColor: AppColors.primary,
+            title: 'Contact HR / Support',
+            subtitle: 'Call, email or chat',
+            onTap: _showContactHRSheet,
+          ),
+          _settingsRow(
+            icon: Icons.notifications_none_rounded,
+            iconBg: AppColors.warningLight,
+            iconColor: AppColors.warning,
+            title: 'Notification settings',
+            subtitle: 'Push, email & alerts',
+            onTap: _showNotificationSettingsSheet,
+          ),
+          _settingsRow(
+            icon: Icons.language_rounded,
+            iconBg: AppColors.veryLightGreen,
+            iconColor: AppColors.green,
+            title: 'Language',
+            subtitle: selectedLanguage == 'English (India)' ? 'English' : selectedLanguage,
+            onTap: _showLanguageSheet,
+          ),
+          _settingsRow(
+            icon: Icons.info_outline_rounded,
+            iconBg: AppColors.infoLight,
+            iconColor: AppColors.info,
+            title: 'About app',
+            subtitle: 'Version, terms & policies',
+            onTap: _showAboutSheet,
+            isLast: true,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _settingsRow({
+    required IconData icon,
+    required Color iconBg,
+    required Color iconColor,
+    required String title,
+    required String subtitle,
+    required VoidCallback onTap,
+    bool isLast = false,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.vertical(
+        top: title == 'Contact HR / Support' ? const Radius.circular(17) : Radius.zero,
+        bottom: isLast ? const Radius.circular(17) : Radius.zero,
+      ),
+      child: Container(
+        constraints: const BoxConstraints(minHeight: 59),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: isLast
+            ? null
+            : const BoxDecoration(border: Border(bottom: BorderSide(color: AppColors.divider, width: .7))),
+        child: Row(
+          children: [
+            Container(
+              width: 31,
+              height: 31,
+              decoration: BoxDecoration(color: iconBg, borderRadius: BorderRadius.circular(10)),
+              child: Icon(icon, size: 17, color: iconColor),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
+                  const SizedBox(height: 2),
+                  Text(subtitle, style: const TextStyle(fontSize: 9, color: AppColors.mutedText)),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right_rounded, size: 18, color: AppColors.mutedText),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLogoutButton() {
+    return SizedBox(
+      height: 42,
+      child: TextButton.icon(
+        onPressed: _showLogoutSheet,
+        style: TextButton.styleFrom(
+          backgroundColor: AppColors.dangerLight,
+          foregroundColor: AppColors.danger,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(13)),
+        ),
+        icon: const Icon(Icons.logout_rounded, size: 16),
+        label: const Text('Log out', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800)),
+      ),
+    );
+  }
+
+  Widget _buildAdminAccessRow() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+      decoration: BoxDecoration(
+        color: AppColors.background,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.mutedText.withValues(alpha: .55), style: BorderStyle.solid),
+      ),
+      child: Row(
+        children: [
+          const Expanded(
+            child: Text(
+              'This employee has admin access',
+              style: TextStyle(fontSize: 9, color: AppColors.textSecondary, fontWeight: FontWeight.w600),
+            ),
+          ),
+          OutlinedButton(
+            onPressed: widget.onSwitchToAdminPanel,
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppColors.primary,
+              side: const BorderSide(color: AppColors.green),
+              minimumSize: const Size(58, 28),
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              textStyle: const TextStyle(fontSize: 9, fontWeight: FontWeight.w800),
+            ),
+            child: const Text('Enable'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showContactHRSheet() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: .45),
+      builder: (_) => _ProfileBottomSheet(
+        title: 'Contact HR / Support',
+        subtitle: 'Mon–Fri, 9 AM – 6 PM IST',
+        child: Column(
+          children: [
+            _contactAction('Call HR desk', AppConstants.hrPhone, Icons.headset_mic_outlined, () async {
+              final uri = Uri(scheme: 'tel', path: AppConstants.hrPhone);
+              if (await canLaunchUrl(uri)) await launchUrl(uri);
+            }),
+            const SizedBox(height: 8),
+            _contactAction('Email HR', AppConstants.hrEmail, Icons.mail_outline_rounded, () async {
+              final uri = Uri(scheme: 'mailto', path: AppConstants.hrEmail);
+              if (await canLaunchUrl(uri)) await launchUrl(uri);
+            }),
+            const SizedBox(height: 8),
+            _contactAction('Chat with support', 'Typically replies in minutes', Icons.chat_bubble_outline_rounded, () {
+              Navigator.pop(context);
+              _showMessage('Support chat will be available here.');
+            }),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _contactAction(String title, String subtitle, IconData icon, VoidCallback onTap) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: AppColors.background,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppColors.divider),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 31,
+              height: 31,
+              decoration: BoxDecoration(color: AppColors.veryLightGreen, borderRadius: BorderRadius.circular(10)),
+              child: Icon(icon, color: AppColors.primary, size: 16),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800)),
+                  const SizedBox(height: 2),
+                  Text(subtitle, style: const TextStyle(fontSize: 9, color: AppColors.mutedText)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showNotificationSettingsSheet() async {
+    final prefs = await SharedPreferences.getInstance();
+    bool push = prefs.getBool('notify_push') ?? true;
+    bool email = prefs.getBool('notify_email') ?? true;
+    bool attendance = prefs.getBool('notify_attendance') ?? true;
+    bool leave = prefs.getBool('notify_leave_ticket') ?? true;
+    bool announcements = prefs.getBool('notify_announcements') ?? false;
+
+    if (!mounted) return;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: .45),
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (context, setSheetState) {
+          Future<void> setValue(String key, bool value) async {
+            await prefs.setBool(key, value);
+          }
+
+          return _ProfileBottomSheet(
+            title: 'Notification settings',
+            subtitle: "Choose what you'd like to be notified about.",
+            child: Column(
+              children: [
+                _notificationToggle('Push notifications', 'On this device', push, (v) async { setSheetState(() => push = v); await setValue('notify_push', v); }),
+                _notificationToggle('Email notifications', 'Daily summaries & approvals', email, (v) async { setSheetState(() => email = v); await setValue('notify_email', v); }),
+                _notificationToggle('Attendance reminders', 'If you forget to check in/out', attendance, (v) async { setSheetState(() => attendance = v); await setValue('notify_attendance', v); }),
+                _notificationToggle('Leave & ticket updates', 'Status changes on your requests', leave, (v) async { setSheetState(() => leave = v); await setValue('notify_leave_ticket', v); }),
+                _notificationToggle('Announcements', 'Company-wide updates', announcements, (v) async { setSheetState(() => announcements = v); await setValue('notify_announcements', v); }, isLast: true),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _notificationToggle(String title, String subtitle, bool value, ValueChanged<bool> onChanged, {bool isLast = false}) {
+    return Container(
+      constraints: const BoxConstraints(minHeight: 55),
+      padding: const EdgeInsets.symmetric(vertical: 7),
+      decoration: isLast ? null : const BoxDecoration(border: Border(bottom: BorderSide(color: AppColors.divider, width: .7))),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800)),
+                const SizedBox(height: 2),
+                Text(subtitle, style: const TextStyle(fontSize: 9, color: AppColors.mutedText)),
+              ],
+            ),
+          ),
+          Switch.adaptive(
+            value: value,
+            onChanged: onChanged,
+            activeTrackColor: AppColors.green,
+            activeThumbColor: Colors.white,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showLanguageSheet() async {
+    final prefs = await SharedPreferences.getInstance();
+    String language = prefs.getString('app_language') ?? 'English (India)';
+
+    if (!mounted) return;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: .45),
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (context, setSheetState) => _ProfileBottomSheet(
+          title: 'Language',
+          subtitle: 'Applies across the app.',
+          child: Column(
+            children: [
+              _languageChoice('English', 'English', 'English (India)', language, (v) async { setSheetState(() => language = v); await WorkoraAppSettings.setLanguage(v); if (mounted) setState(() => selectedLanguage = v); }),
+              _languageChoice('Malayalam', 'മലയാളം', 'Malayalam', language, (v) async { setSheetState(() => language = v); await WorkoraAppSettings.setLanguage(v); if (mounted) setState(() => selectedLanguage = v); }),
+              _languageChoice('Hindi', 'हिन्दी', 'Hindi', language, (v) async { setSheetState(() => language = v); await WorkoraAppSettings.setLanguage(v); if (mounted) setState(() => selectedLanguage = v); }),
+              _languageChoice('Tamil', 'தமிழ்', 'Tamil', language, (v) async { setSheetState(() => language = v); await WorkoraAppSettings.setLanguage(v); if (mounted) setState(() => selectedLanguage = v); }, isLast: true),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _languageChoice(String title, String native, String value, String selected, ValueChanged<String> onChanged, {bool isLast = false}) {
+    final active = value == selected;
+    return InkWell(
+      onTap: () => onChanged(value),
+      child: Container(
+        constraints: const BoxConstraints(minHeight: 57),
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        decoration: isLast ? null : const BoxDecoration(border: Border(bottom: BorderSide(color: AppColors.divider, width: .7))),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800)),
+                  const SizedBox(height: 2),
+                  Text(native, style: const TextStyle(fontSize: 9, color: AppColors.mutedText)),
+                ],
+              ),
+            ),
+            Container(
+              width: 17,
+              height: 17,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(color: active ? AppColors.green : AppColors.divider, width: 1.2),
+              ),
+              child: active
+                  ? Center(child: Container(width: 8, height: 8, decoration: const BoxDecoration(color: AppColors.green, shape: BoxShape.circle)))
+                  : null,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showAboutSheet() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: .45),
+      builder: (_) => _ProfileBottomSheet(
+        title: 'About Workora',
+        subtitle: 'HRMS by Edubotics, a division of Hindustan Group.',
+        child: Column(
+          children: [
+            _aboutRow('App version', AppConstants.appVersion, null),
+            _aboutRow('Build', '2026.09.14', null),
+            _aboutRow('Terms of service', 'View', () => _showMessage('Terms of service will be available here.')),
+            _aboutRow('Privacy policy', 'View', () => _showMessage('Privacy policy will be available here.')),
+            _aboutRow('Send feedback', 'Open', () async {
+              final uri = Uri(scheme: 'mailto', path: AppConstants.hrEmail, queryParameters: {'subject': 'Workora feedback'});
+              if (await canLaunchUrl(uri)) await launchUrl(uri);
+            }, isLast: true),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _aboutRow(String label, String value, VoidCallback? onTap, {bool isLast = false}) {
+    final child = Container(
+      constraints: const BoxConstraints(minHeight: 40),
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      decoration: isLast ? null : const BoxDecoration(border: Border(bottom: BorderSide(color: AppColors.divider, width: .7))),
+      child: Row(
+        children: [
+          Expanded(child: Text(label, style: const TextStyle(fontSize: 10, color: AppColors.textSecondary))),
+          Text(value, style: const TextStyle(fontSize: 10, color: AppColors.textPrimary, fontWeight: FontWeight.w700)),
+        ],
+      ),
+    );
+    return onTap == null ? child : InkWell(onTap: onTap, child: child);
+  }
+
+  Future<void> _showLogoutSheet() async {
+    final shouldLogout = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: .45),
+      builder: (_) => _ProfileBottomSheet(
+        title: 'Log out of Workora?',
+        subtitle: "You'll need to sign in again to check in, view payslips, or request leave.",
+        child: Row(
+          children: [
+            Expanded(
+              child: OutlinedButton(
+                onPressed: () => Navigator.pop(context, false),
+                style: OutlinedButton.styleFrom(
+                  minimumSize: const Size(0, 42),
+                  foregroundColor: AppColors.textPrimary,
+                  side: const BorderSide(color: AppColors.divider),
+                  backgroundColor: AppColors.background,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(11)),
+                ),
+                child: const Text('Cancel', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800)),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                style: FilledButton.styleFrom(
+                  minimumSize: const Size(0, 42),
+                  backgroundColor: AppColors.danger,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(11)),
+                ),
+                child: const Text('Log out', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800)),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (shouldLogout == true) {
+      await _performLogout();
+    }
+  }
+
+  Future<void> _performLogout() async {
+    await SessionManager.clearSession();
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+      (_) => false,
     );
   }
 
@@ -1925,8 +3510,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     .toList(),
             onChanged:
                 (value) {
-              if (value == null)
+              if (value == null) {
                 return;
+              }
 
               setState(() {
                 _employmentType =
@@ -1971,7 +3557,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   Icons
                       .person_pin_circle_outlined,
                   color:
-                      AppColors.info,
+                      AppColors.primary,
                   size: 20,
                 ),
                 const SizedBox(
@@ -2208,8 +3794,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ).toList(),
             onChanged:
                 (value) {
-              if (value == null)
+              if (value == null) {
                 return;
+              }
 
               setState(() {
                 _bloodGroup =
@@ -2357,8 +3944,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ],
             ),
           ),
-          if (actionButton != null)
-            actionButton,
+          ?actionButton,
         ],
       ),
     );
@@ -2515,6 +4101,482 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 .textSecondary,
       ),
       onTap: onTap,
+    );
+  }
+}
+class _PersonalDetailsEditScreen extends StatefulWidget {
+  final String phone;
+  final String personalEmail;
+  final String address;
+  final String emergencyContact;
+  final String bloodGroup;
+
+  const _PersonalDetailsEditScreen({
+    required this.phone,
+    required this.personalEmail,
+    required this.address,
+    required this.emergencyContact,
+    required this.bloodGroup,
+  });
+
+  @override
+  State<_PersonalDetailsEditScreen> createState() =>
+      _PersonalDetailsEditScreenState();
+}
+
+class _PersonalDetailsEditScreenState
+    extends State<_PersonalDetailsEditScreen> {
+  late final TextEditingController phoneController;
+  late final TextEditingController personalEmailController;
+  late final TextEditingController addressController;
+  late final TextEditingController emergencyContactController;
+  late String bloodGroup;
+
+  final List<String> bloodGroups = const [
+    'A+', 'A-', 'B+', 'B-', 'O+', 'O-', 'AB+', 'AB-', 'Unknown',
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    phoneController = TextEditingController(text: widget.phone);
+    personalEmailController = TextEditingController(text: widget.personalEmail);
+    addressController = TextEditingController(text: widget.address);
+    emergencyContactController =
+        TextEditingController(text: widget.emergencyContact);
+    bloodGroup = bloodGroups.contains(widget.bloodGroup)
+        ? widget.bloodGroup
+        : 'Unknown';
+  }
+
+  @override
+  void dispose() {
+    phoneController.dispose();
+    personalEmailController.dispose();
+    addressController.dispose();
+    emergencyContactController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      appBar: AppBar(
+        backgroundColor: AppColors.background,
+        elevation: 0,
+        title: const Text(
+          'Personal Details',
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+        ),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_rounded),
+          onPressed: () => Navigator.pop(context),
+        ),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(18, 10, 18, 28),
+        children: [
+          _editField('Phone', phoneController, Icons.phone_outlined),
+          _editField('Personal email', personalEmailController, Icons.mail_outline_rounded),
+          _editField('Address', addressController, Icons.location_on_outlined, maxLines: 3),
+          _editField('Emergency contact', emergencyContactController, Icons.phone_in_talk_outlined),
+          Container(
+            margin: const EdgeInsets.only(bottom: 14),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+            decoration: BoxDecoration(
+              color: AppColors.surface,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: AppColors.divider),
+            ),
+            child: DropdownButtonFormField<String>(
+              initialValue: bloodGroup,
+              decoration: const InputDecoration(
+                labelText: 'Blood group',
+                prefixIcon: Icon(Icons.favorite_outline),
+                border: InputBorder.none,
+              ),
+              items: bloodGroups
+                  .map((value) => DropdownMenuItem(value: value, child: Text(value)))
+                  .toList(),
+              onChanged: (value) {
+                if (value != null) setState(() => bloodGroup = value);
+              },
+            ),
+          ),
+          const SizedBox(height: 8),
+          SizedBox(
+            height: 48,
+            child: FilledButton(
+              onPressed: () {
+                Navigator.pop(context, <String, String>{
+                  'phone': phoneController.text.trim(),
+                  'personalEmail': personalEmailController.text.trim(),
+                  'address': addressController.text.trim(),
+                  'emergencyContact': emergencyContactController.text.trim(),
+                  'bloodGroup': bloodGroup,
+                });
+              },
+              style: FilledButton.styleFrom(
+                backgroundColor: AppColors.green,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
+              ),
+              child: const Text(
+                'Save changes',
+                style: TextStyle(fontWeight: FontWeight.w800),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _editField(
+    String label,
+    TextEditingController controller,
+    IconData icon, {
+    int maxLines = 1,
+  }) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.divider),
+      ),
+      child: TextField(
+        controller: controller,
+        maxLines: maxLines,
+        decoration: InputDecoration(
+          labelText: label,
+          prefixIcon: Icon(icon),
+          border: InputBorder.none,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 15),
+        ),
+      ),
+    );
+  }
+}
+
+class _WorkDetailsEditScreen extends StatefulWidget {
+  final String employeeId;
+  final String name;
+  final String designation;
+  final String workLocation;
+  final String officialEmail;
+  final String dateOfJoining;
+  final String employmentType;
+
+  const _WorkDetailsEditScreen({
+    required this.employeeId,
+    required this.name,
+    required this.designation,
+    required this.workLocation,
+    required this.officialEmail,
+    required this.dateOfJoining,
+    required this.employmentType,
+  });
+
+  @override
+  State<_WorkDetailsEditScreen> createState() => _WorkDetailsEditScreenState();
+}
+
+class _WorkDetailsEditScreenState extends State<_WorkDetailsEditScreen> {
+  late final TextEditingController employeeIdController;
+  late final TextEditingController nameController;
+  late final TextEditingController designationController;
+  late final TextEditingController workLocationController;
+  late final TextEditingController officialEmailController;
+  late String dateOfJoining;
+  late String employmentType;
+
+  final employmentTypes = const [
+    'Full-Time', 'Part-Time', 'Contract', 'Intern', 'Probation',
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    employeeIdController = TextEditingController(text: widget.employeeId);
+    nameController = TextEditingController(text: widget.name);
+    designationController = TextEditingController(text: widget.designation);
+    workLocationController = TextEditingController(text: widget.workLocation);
+    officialEmailController = TextEditingController(text: widget.officialEmail);
+    dateOfJoining = widget.dateOfJoining;
+    employmentType = employmentTypes.contains(widget.employmentType)
+        ? widget.employmentType
+        : employmentTypes.first;
+  }
+
+  @override
+  void dispose() {
+    employeeIdController.dispose();
+    nameController.dispose();
+    designationController.dispose();
+    workLocationController.dispose();
+    officialEmailController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickDate() async {
+    DateTime initial = DateTime.now();
+    if (dateOfJoining.trim().isNotEmpty) {
+      try {
+        initial = DateFormat('dd MMM yyyy').parse(dateOfJoining);
+      } catch (_) {
+        try {
+          initial = DateTime.parse(dateOfJoining);
+        } catch (_) {}
+      }
+    }
+
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(2000),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
+    );
+    if (picked != null && mounted) {
+      setState(() => dateOfJoining = DateFormat('dd MMM yyyy').format(picked));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      appBar: AppBar(
+        backgroundColor: AppColors.background,
+        elevation: 0,
+        title: const Text(
+          'Work Details',
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+        ),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_rounded),
+          onPressed: () => Navigator.pop(context),
+        ),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(18, 10, 18, 28),
+        children: [
+          _editField('Employee ID', employeeIdController, Icons.badge_outlined),
+          _editField('Name', nameController, Icons.person_outline),
+          _editField('Designation', designationController, Icons.business_center_outlined),
+          _editField('Work location', workLocationController, Icons.location_on_outlined),
+          _editField('Official email', officialEmailController, Icons.mail_outline_rounded),
+          InkWell(
+            onTap: _pickDate,
+            borderRadius: BorderRadius.circular(14),
+            child: Container(
+              margin: const EdgeInsets.only(bottom: 14),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 17),
+              decoration: BoxDecoration(
+                color: AppColors.surface,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: AppColors.divider),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.calendar_month_outlined, color: AppColors.primary),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Date of joining', style: TextStyle(fontSize: 11, color: AppColors.mutedText)),
+                        const SizedBox(height: 4),
+                        Text(
+                          dateOfJoining.isEmpty ? 'Not specified' : dateOfJoining,
+                          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Icon(Icons.chevron_right_rounded, color: AppColors.mutedText),
+                ],
+              ),
+            ),
+          ),
+          Container(
+            margin: const EdgeInsets.only(bottom: 14),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+            decoration: BoxDecoration(
+              color: AppColors.surface,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: AppColors.divider),
+            ),
+            child: DropdownButtonFormField<String>(
+              initialValue: employmentType,
+              decoration: const InputDecoration(
+                labelText: 'Employment type',
+                prefixIcon: Icon(Icons.work_outline),
+                border: InputBorder.none,
+              ),
+              items: employmentTypes
+                  .map((value) => DropdownMenuItem(value: value, child: Text(value)))
+                  .toList(),
+              onChanged: (value) {
+                if (value != null) setState(() => employmentType = value);
+              },
+            ),
+          ),
+          const SizedBox(height: 8),
+          SizedBox(
+            height: 48,
+            child: FilledButton(
+              onPressed: () {
+                Navigator.pop(context, <String, String>{
+                  'employeeId': employeeIdController.text.trim(),
+                  'name': nameController.text.trim(),
+                  'designation': designationController.text.trim(),
+                  'workLocation': workLocationController.text.trim(),
+                  'officialEmail': officialEmailController.text.trim(),
+                  'dateOfJoining': dateOfJoining,
+                  'employmentType': employmentType,
+                });
+              },
+              style: FilledButton.styleFrom(
+                backgroundColor: AppColors.green,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
+              ),
+              child: const Text(
+                'Save changes',
+                style: TextStyle(fontWeight: FontWeight.w800),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _editField(
+    String label,
+    TextEditingController controller,
+    IconData icon,
+  ) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.divider),
+      ),
+      child: TextField(
+        controller: controller,
+        decoration: InputDecoration(
+          labelText: label,
+          prefixIcon: Icon(icon),
+          border: InputBorder.none,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 15),
+        ),
+      ),
+    );
+  }
+}
+
+/// Reusable Workora bottom sheet used by the employee Profile screen.
+/// It intentionally stays lightweight so every profile action opens with the
+/// same rounded, dimmed-background interaction as the design reference.
+class _ProfileBottomSheet extends StatelessWidget {
+  final String title;
+  final String subtitle;
+  final Widget child;
+
+  const _ProfileBottomSheet({
+    required this.title,
+    required this.subtitle,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
+
+    return Padding(
+      padding: EdgeInsets.only(bottom: bottomInset),
+      child: Container(
+        constraints: const BoxConstraints(maxWidth: 520),
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+        decoration: const BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.vertical(
+            top: Radius.circular(24),
+          ),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Center(
+              child: Container(
+                width: 30,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 8),
+                decoration: BoxDecoration(
+                  color: AppColors.divider,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+            ),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        subtitle,
+                        style: const TextStyle(
+                          fontSize: 10,
+                          height: 1.35,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                InkWell(
+                  onTap: () => Navigator.of(context).pop(),
+                  borderRadius: BorderRadius.circular(20),
+                  child: Container(
+                    width: 30,
+                    height: 30,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(color: AppColors.divider),
+                    ),
+                    child: const Icon(
+                      Icons.close_rounded,
+                      size: 16,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            child,
+          ],
+        ),
+      ),
     );
   }
 }

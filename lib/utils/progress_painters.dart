@@ -14,7 +14,7 @@ class ShiftRingPainter extends CustomPainter {
     final rect = Rect.fromCircle(center: center, radius: radius);
 
     final track = Paint()
-      ..color = Colors.white.withOpacity(0.15)
+      ..color = Colors.white.withValues(alpha: 0.15)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 8
       ..strokeCap = StrokeCap.round;
@@ -39,7 +39,7 @@ class ShiftRingPainter extends CustomPainter {
       final angle = -pi / 2 + sweepAngle;
       final dotCenter = Offset(center.dx + radius * cos(angle), center.dy + radius * sin(angle));
       final glow = Paint()
-        ..color = Colors.white.withOpacity(0.55)
+        ..color = Colors.white.withValues(alpha: 0.55)
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8);
       canvas.drawCircle(dotCenter, 9, glow);
       final dot = Paint()..color = Colors.white;
@@ -64,7 +64,7 @@ class PercentRingPainter extends CustomPainter {
     final rect = Rect.fromCircle(center: center, radius: radius);
 
     final track = Paint()
-      ..color = color.withOpacity(0.15)
+      ..color = color.withValues(alpha: 0.15)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 4;
     canvas.drawCircle(center, radius, track);

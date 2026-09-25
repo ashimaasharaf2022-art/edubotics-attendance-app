@@ -171,7 +171,7 @@ class _AdminAttendanceScreenState extends State<AdminAttendanceScreen> with Sing
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
         child: ListTile(
           leading: CircleAvatar(
-            backgroundColor: AppColors.primary.withOpacity(0.12),
+            backgroundColor: AppColors.primary.withValues(alpha: 0.12),
             backgroundImage: avatarImg,
             child: avatarImg == null ? const Icon(Icons.person, color: AppColors.primary) : null,
           ),

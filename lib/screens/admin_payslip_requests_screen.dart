@@ -117,7 +117,7 @@ class _AdminPayslipRequestsScreenState extends State<AdminPayslipRequestsScreen>
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                         decoration: BoxDecoration(
-                          color: (status == "ready" ? AppColors.success : AppColors.danger).withOpacity(0.12),
+                          color: (status == "ready" ? AppColors.success : AppColors.danger).withValues(alpha: 0.12),
                           borderRadius: BorderRadius.circular(20),
                         ),
                         child: Text(

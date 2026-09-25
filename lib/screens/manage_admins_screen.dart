@@ -327,7 +327,7 @@ class _ManageAdminsScreenState
                           employees.length,
 
                       separatorBuilder:
-                          (_, __) =>
+                          (_, _) =>
                               const SizedBox(
                         height: 10,
                       ),
@@ -367,8 +367,8 @@ class _ManageAdminsScreenState
                                 backgroundColor:
                                     AppColors
                                         .primary
-                                        .withOpacity(
-                                  .10,
+                                        .withValues(
+                                  alpha: .10,
                                 ),
 
                                 child: Text(

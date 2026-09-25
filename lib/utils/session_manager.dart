@@ -1,5 +1,4 @@
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 
 /// Handles persisting the logged-in user's session locally so they
 /// don't have to log in every time they open the app.
@@ -8,17 +7,31 @@ class SessionManager {
   static const _keyEmployeeName = "employeeName";
   static const _keyRole = "role";
   static const _keyLoginTime = "loginTime";
+  static const _keyRememberMe = "rememberMe";
 
   static Future<void> saveSession({
     required String employeeId,
     required String role,
     String? employeeName,
+    bool rememberMe = true,
   }) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_keyEmployeeId, employeeId);
     await prefs.setString(_keyRole, role);
     await prefs.setString(_keyEmployeeName, employeeName ?? "");
     await prefs.setString(_keyLoginTime, DateTime.now().toIso8601String());
+    await prefs.setBool(_keyRememberMe, rememberMe);
+
+    // If Remember Me is disabled, do not keep a reusable login session
+    // across app restarts. The current login remains active until the app
+    // is closed.
+    if (!rememberMe) {
+      await prefs.remove(_keyEmployeeId);
+      await prefs.remove(_keyEmployeeName);
+      await prefs.remove(_keyRole);
+      await prefs.remove(_keyLoginTime);
+    await prefs.remove(_keyRememberMe);
+    }
   }
 
   /// Returns the saved session, or null if no one is logged in.
@@ -26,8 +39,13 @@ class SessionManager {
     final prefs = await SharedPreferences.getInstance();
     final employeeId = prefs.getString(_keyEmployeeId);
     final role = prefs.getString(_keyRole);
+    final rememberMe = prefs.getBool(_keyRememberMe);
 
-    if (employeeId == null || role == null) return null;
+    // Existing installations did not have this key. Treat those sessions as
+    // remembered so current users are not unexpectedly logged out.
+    if (rememberMe == false || employeeId == null || role == null) {
+      return null;
+    }
 
     return {
       "employeeId": employeeId,
@@ -52,11 +70,11 @@ class SessionManager {
   }
 
   static Future<void> clearSession() async {
-    await FirebaseAuth.instance.signOut();
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_keyEmployeeId);
     await prefs.remove(_keyRole);
     await prefs.remove(_keyEmployeeName);
     await prefs.remove(_keyLoginTime);
+    await prefs.remove(_keyRememberMe);
   }
 }

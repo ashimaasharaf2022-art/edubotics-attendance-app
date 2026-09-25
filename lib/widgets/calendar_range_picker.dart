@@ -4,9 +4,18 @@ import '../utils/app_colors.dart';
 class CalendarRangePicker extends StatefulWidget {
   final DateTime? initialFrom;
   final DateTime? initialTo;
+  final DateTime? minDate;
+  final DateTime? maxDate;
   final void Function(DateTime from, DateTime to) onRangeSelected;
 
-  const CalendarRangePicker({super.key, this.initialFrom, this.initialTo, required this.onRangeSelected});
+  const CalendarRangePicker({
+    super.key,
+    this.initialFrom,
+    this.initialTo,
+    this.minDate,
+    this.maxDate,
+    required this.onRangeSelected,
+  });
 
   @override
   State<CalendarRangePicker> createState() => _CalendarRangePickerState();
@@ -54,7 +63,36 @@ class _CalendarRangePickerState extends State<CalendarRangePicker> {
     return (from != null && _sameDay(day, from!)) || (to != null && _sameDay(day, to!));
   }
 
-  bool _sameDay(DateTime a, DateTime b) => a.year == b.year && a.month == b.month && a.day == b.day;
+  bool _sameDay(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
+
+  bool _isBeforeMin(DateTime day) {
+    final min = widget.minDate;
+    return min != null && day.isBefore(DateTime(min.year, min.month, min.day));
+  }
+
+  bool _isAfterMax(DateTime day) {
+    final max = widget.maxDate;
+    return max != null && day.isAfter(DateTime(max.year, max.month, max.day));
+  }
+
+  bool _isDisabled(DateTime day) => _isBeforeMin(day) || _isAfterMax(day);
+
+  bool _canShowPreviousMonth() {
+    final min = widget.minDate;
+    if (min == null) return true;
+    final previousMonth = DateTime(visibleMonth.year, visibleMonth.month - 1, 1);
+    final minMonth = DateTime(min.year, min.month, 1);
+    return !previousMonth.isBefore(minMonth);
+  }
+
+  bool _canShowNextMonth() {
+    final max = widget.maxDate;
+    if (max == null) return true;
+    final nextMonth = DateTime(visibleMonth.year, visibleMonth.month + 1, 1);
+    final maxMonth = DateTime(max.year, max.month, 1);
+    return !nextMonth.isAfter(maxMonth);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -69,12 +107,16 @@ class _CalendarRangePickerState extends State<CalendarRangePicker> {
           children: [
             IconButton(
               icon: const Icon(Icons.chevron_left),
-              onPressed: () => setState(() => visibleMonth = DateTime(visibleMonth.year, visibleMonth.month - 1, 1)),
+              onPressed: _canShowPreviousMonth()
+                  ? () => setState(() => visibleMonth = DateTime(visibleMonth.year, visibleMonth.month - 1, 1))
+                  : null,
             ),
             Text("${_months[visibleMonth.month - 1]} ${visibleMonth.year}", style: const TextStyle(fontWeight: FontWeight.bold)),
             IconButton(
               icon: const Icon(Icons.chevron_right),
-              onPressed: () => setState(() => visibleMonth = DateTime(visibleMonth.year, visibleMonth.month + 1, 1)),
+              onPressed: _canShowNextMonth()
+                  ? () => setState(() => visibleMonth = DateTime(visibleMonth.year, visibleMonth.month + 1, 1))
+                  : null,
             ),
           ],
         ),
@@ -90,23 +132,25 @@ class _CalendarRangePickerState extends State<CalendarRangePicker> {
           itemBuilder: (context, index) {
             if (index < leadingBlank) return const SizedBox.shrink();
             final day = DateTime(visibleMonth.year, visibleMonth.month, index - leadingBlank + 1);
-            final isPast = day.isBefore(DateTime.now().subtract(const Duration(days: 1)));
+            final isDisabled = _isDisabled(day);
             final inRange = _isInRange(day);
             final isEndpoint = _isEndpoint(day);
 
             return GestureDetector(
-              onTap: isPast ? null : () => _onDayTap(day),
+              onTap: isDisabled ? null : () => _onDayTap(day),
               child: Container(
                 margin: const EdgeInsets.all(2),
                 decoration: BoxDecoration(
-                  color: isEndpoint ? AppColors.primary : (inRange ? AppColors.primary.withOpacity(0.15) : null),
+                  color: isEndpoint ? AppColors.primary : (inRange ? AppColors.primary.withValues(alpha: 0.15) : null),
                   shape: BoxShape.circle,
                 ),
                 alignment: Alignment.center,
                 child: Text(
                   "${day.day}",
                   style: TextStyle(
-                    color: isPast ? AppColors.textSecondary.withOpacity(0.4) : (isEndpoint ? Colors.white : AppColors.textPrimary),
+                    color: isDisabled
+                        ? AppColors.textSecondary.withValues(alpha: 0.4)
+                        : (isEndpoint ? Colors.white : AppColors.textPrimary),
                     fontWeight: isEndpoint ? FontWeight.bold : FontWeight.normal,
                     fontSize: 13,
                   ),

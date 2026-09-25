@@ -58,7 +58,7 @@ class _NotificationSettingsScreenState extends State<NotificationSettingsScreen>
                         title: const Text("Leave Updates"),
                         subtitle: const Text("Get notified when your leave is approved or rejected", style: TextStyle(fontSize: 12)),
                         value: leaveUpdates,
-                        activeColor: AppColors.primary,
+                        activeThumbColor: AppColors.primary,
                         onChanged: (v) {
                           setState(() => leaveUpdates = v);
                           _save("notif_leave", v);
@@ -70,7 +70,7 @@ class _NotificationSettingsScreenState extends State<NotificationSettingsScreen>
                         title: const Text("Work From Home Updates"),
                         subtitle: const Text("Get notified when your WFH request is reviewed", style: TextStyle(fontSize: 12)),
                         value: wfhUpdates,
-                        activeColor: AppColors.primary,
+                        activeThumbColor: AppColors.primary,
                         onChanged: (v) {
                           setState(() => wfhUpdates = v);
                           _save("notif_wfh", v);
@@ -82,7 +82,7 @@ class _NotificationSettingsScreenState extends State<NotificationSettingsScreen>
                         title: const Text("Daily Punch Reminder"),
                         subtitle: const Text("Reminder at 9:25 AM to check in", style: TextStyle(fontSize: 12)),
                         value: dailyReminder,
-                        activeColor: AppColors.primary,
+                        activeThumbColor: AppColors.primary,
                         onChanged: (v) {
                           setState(() => dailyReminder = v);
                           _save("notif_daily", v);

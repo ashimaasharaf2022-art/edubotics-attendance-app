@@ -100,7 +100,7 @@ class _SuperAdminShellState
 
         indicatorColor:
             AppColors.primary
-                .withOpacity(0.15),
+                .withValues(alpha: 0.15),
 
         destinations: const [
           NavigationDestination(

@@ -1,19 +1,19 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../utils/app_colors.dart';
-import '../utils/app_constants.dart';
 import '../utils/session_manager.dart';
+import '../utils/workora_app_settings.dart';
 import 'admin_shell.dart';
 import 'employee_shell.dart';
 import 'change_password_screen.dart';
-import 'language_screen.dart';
+import 'profile_screen.dart';
 import 'login_screens.dart';
-import 'notification_settings_screen.dart';
 
 /// Settings/account menu opened from the profile avatar in the dashboard.
 ///
@@ -45,7 +45,7 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
   bool isSuperAdmin = false;
   String employeeName = "";
   String? photoBase64;
-  String selectedLanguage = "English (India)";
+  bool _isDarkMode = false;
 
   @override
   void initState() {
@@ -56,6 +56,22 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
           "https://edubotics-attendance-default-rtdb.asia-southeast1.firebasedatabase.app",
     ).ref();
     _loadAccount();
+    _loadThemePreference();
+    WorkoraAppSettings.isDarkMode.addListener(_syncGlobalTheme);
+  }
+
+  @override
+  void dispose() {
+    WorkoraAppSettings.isDarkMode.removeListener(_syncGlobalTheme);
+    super.dispose();
+  }
+
+  void _syncGlobalTheme() {
+    if (!mounted) return;
+    final value = WorkoraAppSettings.isDarkMode.value;
+    if (value != _isDarkMode) {
+      setState(() => _isDarkMode = value);
+    }
   }
 
   Future<void> _loadAccount() async {
@@ -71,28 +87,27 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
         setState(() {
           employeeName = data["name"]?.toString() ?? widget.employeeId;
           photoBase64 = data["photoBase64"]?.toString();
-          hasAdminAccess = data["adminAccess"] == true || role == "admin" || role == "superadmin";
+          hasAdminAccess =
+              data["adminAccess"] == true ||
+              role == "admin" ||
+              role == "superadmin";
           isSuperAdmin = role == "superadmin";
+          _accountRole = role;
+          _accountHrAccess =
+              data["hrAccess"] == true ||
+              data["hr_access"] == true ||
+              role == "hr" ||
+              role == "humanresources" ||
+              role == "human_resources" ||
+              role == "human resources";
           loading = false;
         });
       } else {
         setState(() => loading = false);
       }
-
-      // Keep the language preference consistent with the existing settings screen.
-      // This is intentionally loaded locally and does not modify Firebase.
-      // ignore: use_build_context_synchronously
-      final language = await _loadSavedLanguage();
-      if (!mounted) return;
-      setState(() => selectedLanguage = language);
     } catch (_) {
       if (mounted) setState(() => loading = false);
     }
-  }
-
-  Future<String> _loadSavedLanguage() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString("app_language") ?? "English (India)";
   }
 
   String get _initials {
@@ -110,15 +125,6 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
     } catch (_) {
       return null;
     }
-  }
-
-  Future<void> _changeLanguage() async {
-    final result = await Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => const LanguageScreen()),
-    );
-    if (!mounted || result == null) return;
-    setState(() => selectedLanguage = result.toString());
   }
 
   void _switchToAdminPanel() {
@@ -174,222 +180,446 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
     );
   }
 
-  void _showAbout() {
-    showAboutDialog(
-      context: context,
-      applicationName: AppConstants.appName,
-      applicationVersion: AppConstants.appVersion,
-      applicationLegalese: "© ${DateTime.now().year} ${AppConstants.companyName}",
-    );
+  Future<void> _loadThemePreference() async {
+    await WorkoraAppSettings.load();
+    if (!mounted) return;
+
+    setState(() {
+      _isDarkMode = WorkoraAppSettings.isDarkMode.value;
+    });
   }
 
-  void _showContactHR() {
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text("Contact HR / Support"),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _contactRow(Icons.phone, AppConstants.hrPhone),
-            const SizedBox(height: 12),
-            _contactRow(Icons.email, AppConstants.hrEmail),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text("Close")),
-        ],
-      ),
-    );
+  Future<void> _toggleTheme() async {
+    final next = !_isDarkMode;
+
+    setState(() => _isDarkMode = next);
+    await WorkoraAppSettings.setDarkMode(next);
   }
 
-  Widget _contactRow(IconData icon, String value) {
-    return Row(
-      children: [
-        Icon(icon, size: 20, color: AppColors.primary),
-        const SizedBox(width: 10),
-        Expanded(child: Text(value, style: const TextStyle(fontWeight: FontWeight.w600))),
-      ],
-    );
+  bool get hasHrAccess {
+    return _accountRole == 'hr' ||
+        _accountRole == 'humanresources' ||
+        _accountRole == 'human_resources' ||
+        _accountRole == 'human resources' ||
+        _accountHrAccess;
   }
+
+  String _accountRole = 'employee';
+  bool _accountHrAccess = false;
+
+  Color get _sheetBackground =>
+      _isDarkMode ? const Color(0xFF0F1F1A) : AppColors.surface;
+
+  Color get _contentBackground =>
+      _isDarkMode ? const Color(0xFF14251F) : AppColors.background;
+
+  Color get _primaryText =>
+      _isDarkMode ? Colors.white : AppColors.textPrimary;
+
+  Color get _secondaryText =>
+      _isDarkMode ? const Color(0xFFB7C6C0) : AppColors.textSecondary;
+
+  Color get _dividerColor =>
+      _isDarkMode ? const Color(0xFF2B4038) : AppColors.divider;
 
   @override
   Widget build(BuildContext context) {
-    if (loading) {
-      return const Scaffold(
-        backgroundColor: AppColors.background,
-        body: Center(child: CircularProgressIndicator()),
-      );
-    }
 
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      body: SafeArea(
-        child: CustomScrollView(
-          slivers: [
-            SliverToBoxAdapter(child: _buildHeader()),
-            SliverPadding(
-              padding: const EdgeInsets.fromLTRB(20, 18, 20, 28),
-              sliver: SliverList(
-                delegate: SliverChildListDelegate([
-                  _section("Account Settings", [
-                    _tile(Icons.lock_reset, "Change Password", () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => ChangePasswordScreen(employeeId: widget.employeeId),
-                        ),
-                      );
-                    }),
-                  ]),
-                  const SizedBox(height: 10),
-                  _section("Support & Help", [
-                    _tile(Icons.support_agent, "Contact HR / Support", _showContactHR),
-                    _tile(Icons.info_outline, "About App", _showAbout),
-                  ]),
-                  const SizedBox(height: 10),
-                  _section("Preferences", [
-                    _tile(Icons.notifications_outlined, "Notification Settings", () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (_) => const NotificationSettingsScreen()),
-                      );
-                    }),
-                    _tile(Icons.language, "Language — $selectedLanguage", _changeLanguage),
-                  ]),
-                  if (hasAdminAccess && !isSuperAdmin) ...[
-                    const SizedBox(height: 10),
-                    _section("Admin", [
-                      _tile(
-                        widget.isAdminPanel
-                            ? Icons.dashboard_outlined
-                            : Icons.admin_panel_settings_outlined,
-                        widget.isAdminPanel
-                            ? "Switch to My Employee Dashboard"
-                            : "Switch to Admin Panel",
-                        widget.isAdminPanel
-                            ? _switchToMyEmployeeDashboard
-                            : _switchToAdminPanel,
-                      ),
-                    ]),
-                  ],
-                  const SizedBox(height: 10),
-                  _logoutTile(),
-                ]),
+    final topInset = MediaQuery.of(context).padding.top;
+
+    return Material(
+      type: MaterialType.transparency,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          // Leave the system status-bar area untouched so the dashboard's
+          // notification/status icons remain visible.
+          Positioned(
+            top: topInset,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: IgnorePointer(
+              child: Container(
+                color: Colors.black.withValues(alpha: .34),
               ),
             ),
+          ),
+
+          // The drawer begins below the status bar instead of covering it.
+          Positioned(
+            top: topInset,
+            left: 0,
+            bottom: 0,
+            width: MediaQuery.of(context).size.width * .71,
+            child: Material(
+                  color: _sheetBackground,
+                  elevation: 20,
+                  shadowColor: Colors.black.withValues(alpha: .30),
+                  borderRadius: const BorderRadius.only(
+                    topRight: Radius.circular(24),
+                    bottomRight: Radius.circular(24),
+                  ),
+                  clipBehavior: Clip.antiAlias,
+                  child: loading
+                      ? Center(
+                          child: CircularProgressIndicator(
+                            color: AppColors.primary,
+                          ),
+                        )
+                      : Column(
+                          children: [
+                            _buildProfileHeader(context),
+                            Expanded(
+                              child: SingleChildScrollView(
+                                padding: const EdgeInsets.fromLTRB(
+                                  18,
+                                  18,
+                                  18,
+                                  24,
+                                ),
+                                child: Column(
+                                  children: [
+                                    _drawerTile(
+                                      icon: Icons.person_outline_rounded,
+                                      title: 'My profile',
+                                      onTap: _openMyProfile,
+                                    ),
+                                  
+                                    const SizedBox(height: 18),
+                                    _drawerDivider(),
+                                    const SizedBox(height: 18),
+                                    _drawerTile(
+                                      icon: Icons.lock_reset_rounded,
+                                      title: 'Change password',
+                                      onTap: () {
+                                        Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                            builder: (_) => ChangePasswordScreen(
+                                              employeeId: widget.employeeId,
+                                            ),
+                                          ),
+                                        );
+                                      },
+                                    ),
+                                    const SizedBox(height: 10),
+                                    _drawerTile(
+                                      icon: _isDarkMode
+                                          ? Icons.light_mode_rounded
+                                          : Icons.dark_mode_rounded,
+                                      title: _isDarkMode
+                                          ? 'Switch to light mode'
+                                          : 'Switch to dark mode',
+                                      onTap: _toggleTheme,
+                                    ),
+                                    if (hasAdminAccess && !isSuperAdmin) ...[
+                                      const SizedBox(height: 18),
+                                      _drawerDivider(),
+                                      const SizedBox(height: 18),
+                                      _drawerTile(
+                                        icon: widget.isAdminPanel
+                                            ? Icons.dashboard_outlined
+                                            : Icons.admin_panel_settings_outlined,
+                                        title: widget.isAdminPanel
+                                            ? 'Switch to employee dashboard'
+                                            : 'Switch to admin dashboard',
+                                        onTap: widget.isAdminPanel
+                                            ? _switchToMyEmployeeDashboard
+                                            : _switchToAdminPanel,
+                                      ),
+                                    ],
+                                    if (hasHrAccess && !isSuperAdmin) ...[
+                                      const SizedBox(height: 10),
+                                      _drawerTile(
+                                        icon: Icons.badge_outlined,
+                                        title: 'Switch to HR dashboard',
+                                        onTap: _switchToHrDashboard,
+                                      ),
+                                    ],
+                                    const SizedBox(height: 18),
+                                    _drawerDivider(),
+                                    const SizedBox(height: 18),
+                                    _logoutDrawerTile(),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                ),
+              ),
           ],
         ),
-      ),
-    );
+      );
   }
 
-  Widget _buildHeader() {
+  Widget _buildProfileHeader(BuildContext context) {
     final avatar = _avatarImage;
 
     return Container(
-      padding: const EdgeInsets.fromLTRB(20, 12, 20, 22),
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xFF0B0F1F), Color(0xFF171B3D)],
-        ),
-        borderRadius: BorderRadius.vertical(bottom: Radius.circular(28)),
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(18, 46, 18, 22),
+      decoration: BoxDecoration(
+        color: _sheetBackground,
       ),
       child: Column(
         children: [
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              IconButton(
-                onPressed: () => Navigator.pop(context),
-                icon: const Icon(Icons.arrow_back, color: Colors.white),
+              Container(
+                width: 78,
+                height: 78,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: AppColors.primary,
+                    width: 3,
+                  ),
+                  color: AppColors.primary.withValues(alpha: .08),
+                ),
+                child: ClipOval(
+                  child: avatar == null
+                      ? Center(
+                          child: Text(
+                            _initials,
+                            style: const TextStyle(
+                              color: AppColors.primary,
+                              fontSize: 25,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        )
+                      : Image(
+                          image: avatar,
+                          fit: BoxFit.cover,
+                        ),
+                ),
               ),
-              const Spacer(),
-              Image.asset(
-                'assets/images/workora_logo.png',
-                height: 28,
-                width: 28,
-                errorBuilder: (_, __, ___) => const Icon(Icons.blur_circular_rounded, color: Colors.white, size: 28),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 7),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              employeeName.isEmpty
+                                  ? widget.employeeId
+                                  : employeeName,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: _primaryText,
+                                fontSize: 18,
+                                height: 1.15,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Material(
+                            color: _contentBackground,
+                            shape: const CircleBorder(),
+                            child: InkWell(
+                              onTap: () => Navigator.maybePop(context),
+                              customBorder: const CircleBorder(),
+                              child: const SizedBox(
+                                width: 42,
+                                height: 42,
+                                child: Icon(
+                                  Icons.close_rounded,
+                                  size: 25,
+                                  color: AppColors.textSecondary,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'Employee ID: ${widget.employeeId}',
+                        style: TextStyle(
+                          color: _secondaryText,
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ),
-              const SizedBox(width: 7),
-              const Text(
-                "workora",
-                style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800),
-              ),
-              const Spacer(),
-              const SizedBox(width: 48),
             ],
-          ),
-          const SizedBox(height: 18),
-          CircleAvatar(
-            radius: 38,
-            backgroundColor: Colors.white24,
-            backgroundImage: avatar,
-            child: avatar == null
-                ? Text(_initials, style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w800))
-                : null,
-          ),
-          const SizedBox(height: 10),
-          Text(
-            employeeName.isEmpty ? widget.employeeId : employeeName,
-            style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            "ID: ${widget.employeeId}",
-            style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w600),
           ),
         ],
       ),
     );
   }
 
-  Widget _section(String title, List<Widget> tiles) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.only(left: 2, bottom: 8),
-          child: Text(
-            title.toUpperCase(),
-            style: const TextStyle(color: AppColors.textSecondary, fontSize: 11, fontWeight: FontWeight.w700),
-          ),
-        ),
-        Container(
-          decoration: BoxDecoration(
-            color: AppColors.surface,
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: AppShadows.card,
-          ),
-          child: Column(children: tiles),
-        ),
-      ],
-    );
-  }
-
-  Widget _tile(IconData icon, String title, VoidCallback onTap) {
-    return ListTile(
-      leading: Icon(icon, color: AppColors.primary),
-      title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
-      trailing: const Icon(Icons.chevron_right, size: 20, color: AppColors.textSecondary),
-      onTap: onTap,
-    );
-  }
-
-  Widget _logoutTile() {
-    return Container(
-      decoration: BoxDecoration(
-        color: AppColors.surface,
+  Widget _drawerTile({
+    required IconData icon,
+    required String title,
+    required VoidCallback onTap,
+  }) {
+    return Material(
+      color: _contentBackground,
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        onTap: onTap,
         borderRadius: BorderRadius.circular(16),
-        boxShadow: AppShadows.card,
-      ),
-      child: ListTile(
-        leading: const Icon(Icons.logout, color: AppColors.danger),
-        title: const Text("Logout", style: TextStyle(color: AppColors.danger, fontWeight: FontWeight.w700)),
-        onTap: _logout,
+        child: Container(
+          constraints: const BoxConstraints(minHeight: 72),
+          padding: const EdgeInsets.symmetric(
+            horizontal: 13,
+            vertical: 11,
+          ),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: _dividerColor,
+              width: 1,
+            ),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: .10),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Icon(
+                  icon,
+                  color: AppColors.primary,
+                  size: 24,
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Text(
+                  title,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: _primaryText,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              Icon(
+                Icons.chevron_right_rounded,
+                color: _secondaryText,
+                size: 23,
+              ),
+            ],
+          ),
+        ),
       ),
     );
+  }
+
+  Widget _drawerDivider() {
+    return Divider(
+      height: 1,
+      thickness: 1,
+      color: _dividerColor,
+    );
+  }
+
+  Widget _logoutDrawerTile() {
+    return Material(
+      color: _isDarkMode
+          ? const Color(0xFF321D20)
+          : const Color(0xFFFFF0F1),
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        onTap: _logout,
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          constraints: const BoxConstraints(minHeight: 72),
+          padding: const EdgeInsets.symmetric(
+            horizontal: 13,
+            vertical: 11,
+          ),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: AppColors.danger.withValues(alpha: .20),
+            ),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: AppColors.danger.withValues(alpha: .08),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: const Icon(
+                  Icons.logout_rounded,
+                  color: AppColors.danger,
+                  size: 25,
+                ),
+              ),
+              const SizedBox(width: 14),
+              const Expanded(
+                child: Text(
+                  'Log out',
+                  style: TextStyle(
+                    color: AppColors.danger,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+              const Icon(
+                Icons.chevron_right_rounded,
+                color: AppColors.danger,
+                size: 23,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _openMyProfile() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ProfileScreen(
+          employeeId: widget.employeeId,
+        ),
+      ),
+    );
+  }
+
+  void _openAssets() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Assets screen is not connected yet.'),
+      ),
+    );
+  }
+
+  void _switchToHrDashboard() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('HR dashboard is not connected yet.'),
+      ),
+    );
+  }
+
+  Widget _logoutTileNew() {
+    return _logoutDrawerTile();
   }
 }

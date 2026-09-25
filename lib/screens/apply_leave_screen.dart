@@ -40,7 +40,7 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen> {
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(16), boxShadow: AppShadows.card),
               child: DropdownButtonFormField<String>(
-                value: leaveType,
+                initialValue: leaveType,
                 decoration: const InputDecoration(labelText: "Type", border: InputBorder.none),
                 items: LeaveConstants.allTypes.map((t) => DropdownMenuItem(
                   value: t,

@@ -6,10 +6,11 @@
         "$date": {
           ".read": true,
           ".write": true,
-          ".validate": "(!data.exists() && newData.child('employeeId').val() === $employeeId && newData.child('date').val() === $date && newData.hasChild('sessions') && newData.child('sessions').hasChildren()) || (data.exists() && newData.child('employeeId').val() === data.child('employeeId').val() && newData.child('date').val() === data.child('date').val() && newData.hasChild('sessions')) || (data.exists() && newData.child('employeeId').val() === $employeeId && newData.child('date').val() === $date && newData.child('manualEdited').val() === true)"
+          ".validate": "(!data.exists() && newData.child('employeeId').val() == $employeeId && newData.child('date').val() == $date && newData.hasChild('sessions') && newData.child('sessions').hasChildren()) || (data.exists() && newData.child('employeeId').val() == data.child('employeeId').val() && newData.child('date').val() == data.child('date').val() && newData.hasChild('sessions')) || (data.exists() && newData.child('employeeId').val() == $employeeId && newData.child('date').val() == $date && newData.child('manualEdited').val() == true)"
         }
       }
     },
+
     "AttendanceSummary": {
       ".read": true,
       "$employeeId": {
@@ -17,6 +18,7 @@
         ".write": true
       }
     },
+
     "PunchRequests": {
       ".read": true,
       "$employeeId": {
@@ -26,6 +28,7 @@
         }
       }
     },
+
     "CompensationRequests": {
       ".read": true,
       "$employeeId": {
@@ -37,20 +40,22 @@
         }
       }
     },
+
     "users": {
       ".read": true,
       "$employeeId": {
         ".read": true,
         ".write": true,
-        ".validate": "(!data.exists() && newData.child('role').val() === 'employee') || (data.exists() && (newData.child('role').val() === data.child('role').val() || newData.child('role').val() === 'admin' || newData.child('role').val() === 'superadmin'))",
+        ".validate": "(!data.exists() && newData.child('role').val() == 'employee') || (data.exists() && (newData.child('role').val() == data.child('role').val() || newData.child('role').val() == 'admin' || newData.child('role').val() == 'superadmin'))",
         "role": {
-          ".validate": "newData.val() === 'employee' || newData.val() === 'admin' || newData.val() === 'superadmin'"
+          ".validate": "newData.val() == 'employee' || newData.val() == 'admin' || newData.val() == 'superadmin'"
         },
         "adminAccess": {
           ".validate": "newData.isBoolean()"
         }
       }
     },
+
     "LeaveRequests": {
       ".read": true,
       "$employeeId": {
@@ -60,6 +65,7 @@
         }
       }
     },
+
     "Notifications": {
       ".read": true,
       "$employeeId": {
@@ -69,10 +75,12 @@
         }
       }
     },
+
     "AdminActivityLog": {
       ".read": true,
       ".write": true
     },
+
     "LeaveBalances": {
       ".read": true,
       "$employeeId": {
@@ -80,6 +88,7 @@
         ".write": true
       }
     },
+
     "DeviceApprovalRequests": {
       ".read": true,
       "$employeeId": {
@@ -89,14 +98,17 @@
         }
       }
     },
+
     "AdminNotifications": {
       ".read": true,
       ".write": true
     },
+
     "Announcements": {
       ".read": true,
       ".write": true
     },
+
     "WorkFromHomeRequests": {
       ".read": true,
       "$employeeId": {
@@ -106,6 +118,7 @@
         }
       }
     },
+
     "AdminMessages": {
       ".read": true,
       "$messageId": {
@@ -113,6 +126,18 @@
         ".write": true
       }
     },
+
+    "DocumentRequests": {
+      ".read": true,
+      "$employeeId": {
+        ".read": true,
+        "$requestId": {
+          ".read": true,
+          ".write": true
+        }
+      }
+    },
+
     "PayslipRequests": {
       ".read": true,
       "$employeeId": {

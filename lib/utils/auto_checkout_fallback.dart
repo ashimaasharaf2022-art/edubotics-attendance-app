@@ -27,7 +27,7 @@ class AutoCheckoutFallback {
 
     final rawSessions = record['sessions'];
     final sessions = rawSessions is List
-        ? (rawSessions as List).map((s) => Map<String, dynamic>.from(s as Map)).toList()
+        ? (rawSessions).map((s) => Map<String, dynamic>.from(s as Map)).toList()
         : (record['punchIn'] != null
             ? [
                 <String, dynamic>{

@@ -6,7 +6,6 @@ import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:flutter/services.dart';
-import 'dart:typed_data';
 
 import '../utils/app_colors.dart';
 import '../utils/attendance_calculator.dart';
@@ -587,6 +586,100 @@ class _HistoryScreenState extends State<HistoryScreen> {
     }).join('\n');
   }
 
+  String _sessionLocationSummary(
+    Map<String, dynamic>? record,
+  ) {
+    if (record == null) return '--';
+
+    final locations = <String>[];
+    final raw = record['sessions'];
+
+    if (raw is List) {
+      for (var i = 0; i < raw.length; i++) {
+        final item = raw[i];
+        if (item is! Map || item['punchIn'] == null) continue;
+
+        final inAddress = item['punchInAddress']?.toString().trim();
+        final outAddress = item['punchOutAddress']?.toString().trim();
+
+        final inLat = item['punchInLat']?.toString();
+        final inLng = item['punchInLng']?.toString();
+        final outLat = item['punchOutLat']?.toString();
+        final outLng = item['punchOutLng']?.toString();
+
+        final inLocation = (inAddress != null && inAddress.isNotEmpty)
+            ? inAddress
+            : (inLat != null && inLng != null
+                ? '$inLat, $inLng'
+                : '--');
+
+        final outLocation = (outAddress != null && outAddress.isNotEmpty)
+            ? outAddress
+            : (outLat != null && outLng != null
+                ? '$outLat, $outLng'
+                : '--');
+
+        locations.add('S${i + 1} IN: $inLocation\n   OUT: $outLocation');
+      }
+    } else if (raw is Map) {
+      final entries = raw.entries.toList()
+        ..sort((a, b) => a.key.toString().compareTo(b.key.toString()));
+
+      var index = 0;
+      for (final entry in entries) {
+        final item = entry.value;
+        if (item is! Map || item['punchIn'] == null) continue;
+
+        index++;
+        final inAddress = item['punchInAddress']?.toString().trim();
+        final outAddress = item['punchOutAddress']?.toString().trim();
+        final inLat = item['punchInLat']?.toString();
+        final inLng = item['punchInLng']?.toString();
+        final outLat = item['punchOutLat']?.toString();
+        final outLng = item['punchOutLng']?.toString();
+
+        final inLocation = (inAddress != null && inAddress.isNotEmpty)
+            ? inAddress
+            : (inLat != null && inLng != null
+                ? '$inLat, $inLng'
+                : '--');
+
+        final outLocation = (outAddress != null && outAddress.isNotEmpty)
+            ? outAddress
+            : (outLat != null && outLng != null
+                ? '$outLat, $outLng'
+                : '--');
+
+        locations.add('S$index IN: $inLocation\n   OUT: $outLocation');
+      }
+    }
+
+    // Backward compatibility for older single-session records.
+    if (locations.isEmpty &&
+        (record['punchInAddress'] != null ||
+            record['punchInLat'] != null ||
+            record['punchOutAddress'] != null ||
+            record['punchOutLat'] != null)) {
+      final inAddress = record['punchInAddress']?.toString().trim();
+      final outAddress = record['punchOutAddress']?.toString().trim();
+      final inLat = record['punchInLat']?.toString();
+      final inLng = record['punchInLng']?.toString();
+      final outLat = record['punchOutLat']?.toString();
+      final outLng = record['punchOutLng']?.toString();
+
+      final inLocation = (inAddress != null && inAddress.isNotEmpty)
+          ? inAddress
+          : (inLat != null && inLng != null ? '$inLat, $inLng' : '--');
+      final outLocation = (outAddress != null && outAddress.isNotEmpty)
+          ? outAddress
+          : (outLat != null && outLng != null ? '$outLat, $outLng' : '--');
+
+      locations.add('IN: $inLocation\nOUT: $outLocation');
+    }
+
+    return locations.isEmpty ? '--' : locations.join('\n');
+  }
+
   // ---------------------------------------------------------------------------
   // DOWNLOAD HISTORY
   // ---------------------------------------------------------------------------
@@ -1097,14 +1190,14 @@ class _HistoryScreenState extends State<HistoryScreen> {
                           BoxDecoration(
                         color:
                             AppColors.warning
-                                .withOpacity(.08),
+                                .withValues(alpha: .08),
                         borderRadius:
                             BorderRadius.circular(
                                 12),
                         border: Border.all(
                           color:
                               AppColors.warning
-                                  .withOpacity(.25),
+                                  .withValues(alpha: .25),
                         ),
                       ),
                       child: Row(
@@ -1378,7 +1471,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                               BoxDecoration(
                             color: isMisPunch
                                 ? AppColors.warning
-                                    .withOpacity(.08)
+                                    .withValues(alpha: .08)
                                 : AppColors.surface,
                             borderRadius:
                                 BorderRadius.circular(
@@ -1465,6 +1558,14 @@ class _HistoryScreenState extends State<HistoryScreen> {
                                     ),
 
                                     _rowLine(
+                                      Icons.location_on_outlined,
+                                      "Punch locations",
+                                      _sessionLocationSummary(
+                                        e.value,
+                                      ),
+                                    ),
+
+                                    _rowLine(
                                       Icons
                                           .timer_outlined,
                                       "Working hours",
@@ -1528,8 +1629,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
                                     isMisPunch
                                         ? null
                                         : dayType,
-                                  ).withOpacity(
-                                      0.12),
+                                  ).withValues(
+                                      alpha: 0.12),
                                   borderRadius:
                                       BorderRadius
                                           .circular(

@@ -127,6 +127,11 @@ class _ReportsScreenState extends State<ReportsScreen> {
         "${d.day.toString().padLeft(2, '0')}";
   }
 
+  bool _isWeekend(DateTime date) {
+    return date.weekday == DateTime.saturday ||
+        date.weekday == DateTime.sunday;
+  }
+
   bool _isSameDay(DateTime a, DateTime b) {
     return a.year == b.year &&
         a.month == b.month &&
@@ -200,7 +205,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
       dates.add(d);
     }
 
-    return dates;
+    return dates
+        .where((date) => !_isWeekend(date))
+        .toList();
   }
 
   String _periodLabel() {
@@ -358,6 +365,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
     Map<String, dynamic>? record,
     DateTime date,
   ) {
+    // Saturday and Sunday are weekly off days and are never classified.
+    if (_isWeekend(date)) return null;
+
     final isToday = _isSameDay(
       date,
       DateTime.now(),
@@ -448,6 +458,10 @@ class _ReportsScreenState extends State<ReportsScreen> {
       !d.isAfter(lastDay);
       d = d.add(const Duration(days: 1))
     ) {
+      if (_isWeekend(d)) {
+        continue;
+      }
+
       final key = _dateKey(d);
 
       double dayValue;
@@ -1033,7 +1047,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                   ),
                   Switch(
                     value: showPerEmployeeChart,
-                    activeColor: AppColors.primary,
+                    activeThumbColor: AppColors.primary,
                     onChanged: (value) {
                       setState(() {
                         showPerEmployeeChart = value;
@@ -1057,7 +1071,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
             const SizedBox(height: 8),
 
             DropdownButtonFormField<String>(
-              value: selectedEmployeeIdForChart,
+              initialValue: selectedEmployeeIdForChart,
               isExpanded: true,
               decoration: InputDecoration(
                 contentPadding:
@@ -1185,7 +1199,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                               BarAreaData(
                             show: true,
                             color: AppColors.primary
-                                .withOpacity(0.12),
+                                .withValues(alpha: 0.12),
                           ),
                         ),
                       ],
@@ -1291,7 +1305,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                     decoration: BoxDecoration(
                       color: _dayTypeColor(
                         r.lastDayType,
-                      ).withOpacity(0.12),
+                      ).withValues(alpha: 0.12),
                       borderRadius:
                           BorderRadius.circular(20),
                     ),
@@ -1321,7 +1335,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                     ),
                     decoration: BoxDecoration(
                       color: Colors.blue
-                          .withOpacity(0.12),
+                          .withValues(alpha: 0.12),
                       borderRadius:
                           BorderRadius.circular(20),
                     ),

@@ -26,6 +26,7 @@ class _LoginScreenState extends State<LoginScreen> {
   late DatabaseReference dbRef;
 
   bool isLoggingIn = false;
+  bool rememberMe = true;
 
   @override
   void initState() {
@@ -220,6 +221,7 @@ class _LoginScreenState extends State<LoginScreen> {
         employeeId: empId,
         role: role,
         employeeName: name,
+        rememberMe: rememberMe,
       );
 
       TextInput.finishAutofillContext();
@@ -357,7 +359,34 @@ class _LoginScreenState extends State<LoginScreen> {
                           ),
                         ),
 
-                        const SizedBox(height: 22),
+                        const SizedBox(height: 10),
+
+                        Row(
+                          children: [
+                            Checkbox(
+                              value: rememberMe,
+                              activeColor: AppColors.primary,
+                              onChanged: isLoggingIn
+                                  ? null
+                                  : (value) {
+                                      setState(() {
+                                        rememberMe = value ?? false;
+                                      });
+                                    },
+                            ),
+                            const Expanded(
+                              child: Text(
+                                'Remember me on this device',
+                                style: TextStyle(
+                                  color: AppColors.textSecondary,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+
+                        const SizedBox(height: 12),
 
                         SizedBox(
                           height: 54,

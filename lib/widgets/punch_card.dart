@@ -19,7 +19,7 @@ class PunchCard extends StatefulWidget {
     super.key,
     required this.employeeId,
     this.compact = false,
-    this.showWfhButton = true,
+    this.showWfhButton = false,
   });
 
   @override
@@ -40,6 +40,7 @@ class _PunchCardState extends State<PunchCard> {
   double? lastLng;
 
   bool isWorkFromHome = false;
+  bool useWfhForNextPunch = false;
   String? wfhStatusToday;
 
   int outstandingMinutes = 0;
@@ -108,6 +109,11 @@ class _PunchCardState extends State<PunchCard> {
     return "${now.year}-"
         "${now.month.toString().padLeft(2, '0')}-"
         "${now.day.toString().padLeft(2, '0')}";
+  }
+
+  bool _isWeekend(DateTime date) {
+    return date.weekday == DateTime.saturday ||
+        date.weekday == DateTime.sunday;
   }
 
   // ===========================================================================
@@ -188,9 +194,137 @@ class _PunchCardState extends State<PunchCard> {
     return sessions;
   }
 
+  List<Map<String, dynamic>> _sessionMapsFromData(Map data) {
+    final result = <Map<String, dynamic>>[];
+    final raw = data["sessions"];
+
+    if (raw is List) {
+      for (final item in raw) {
+        if (item is Map && item["punchIn"] != null) {
+          result.add(Map<String, dynamic>.from(item));
+        }
+      }
+    } else if (raw is Map) {
+      final entries = raw.entries.toList()
+        ..sort((a, b) => a.key.toString().compareTo(b.key.toString()));
+      for (final entry in entries) {
+        final item = entry.value;
+        if (item is Map && item["punchIn"] != null) {
+          result.add(Map<String, dynamic>.from(item));
+        }
+      }
+    }
+
+    if (result.isEmpty && data["punchIn"] != null) {
+      result.add({
+        "punchIn": data["punchIn"],
+        if (data["punchOut"] != null) "punchOut": data["punchOut"],
+        "workFromHome": data["workFromHome"] == true,
+        if (data["workLocationType"] != null)
+          "workLocationType": data["workLocationType"],
+      });
+    }
+
+    return result;
+  }
+
+  bool _sessionIsWfh(Map<String, dynamic> session) {
+    return session["workFromHome"] == true ||
+        session["workLocationType"]?.toString().toLowerCase() ==
+            "work from home";
+  }
+
+  String get _currentWorkLocationLabel {
+    if (todaySessions.isEmpty) return "Office";
+    return isWorkFromHome ? "Work From Home" : "Office";
+  }
+
+  void _showCurrentWorkLocation() {
+    if (todaySessions.isEmpty) return;
+
+    final location = _currentWorkLocationLabel;
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.white,
+      showDragHandle: true,
+      builder: (_) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                "Current session",
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Icon(
+                    isWorkFromHome
+                        ? Icons.home_work_rounded
+                        : Icons.business_rounded,
+                    color: isWorkFromHome
+                        ? AppColors.success
+                        : AppColors.primary,
+                  ),
+                  const SizedBox(width: 10),
+                  Text(
+                    location,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                isWorkFromHome
+                    ? "This punch session is recorded as Work From Home."
+                    : "This punch session is recorded as Office attendance.",
+                style: const TextStyle(color: AppColors.textSecondary),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   // ===========================================================================
   // UPDATE UI FROM SESSIONS
   // ===========================================================================
+
+  bool _lastSessionIsWfh(Map data) {
+    final raw = data["sessions"];
+    Map? last;
+
+    if (raw is List) {
+      for (final item in raw) {
+        if (item is Map && item["punchIn"] != null) {
+          last = item;
+        }
+      }
+    } else if (raw is Map) {
+      final entries = raw.entries.toList()
+        ..sort((a, b) => a.key.toString().compareTo(b.key.toString()));
+      for (final entry in entries) {
+        if (entry.value is Map && entry.value["punchIn"] != null) {
+          last = entry.value;
+        }
+      }
+    }
+
+    if (last != null) {
+      return last!["workFromHome"] == true ||
+          last!["workLocationType"]?.toString().toLowerCase() ==
+              "work from home";
+    }
+
+    return data["workFromHome"] == true;
+  }
 
   void _updateFromSessions(
     Map data,
@@ -198,8 +332,12 @@ class _PunchCardState extends State<PunchCard> {
     todaySessions =
         _sessionsFromData(data);
 
-    isWorkFromHome =
-        data["workFromHome"] == true;
+    // Work location is session-level. This is important when an employee
+    // has Office and WFH sessions on the same day.
+    final sessionMaps = _sessionMapsFromData(data);
+    isWorkFromHome = sessionMaps.isNotEmpty
+        ? _sessionIsWfh(sessionMaps.last)
+        : data["workFromHome"] == true;
 
     if (todaySessions.isEmpty) {
       punchInTime = "--:--";
@@ -480,6 +618,25 @@ class _PunchCardState extends State<PunchCard> {
   // ===========================================================================
 
   Future<void> loadTodayAttendance() async {
+    if (_isWeekend(DateTime.now())) {
+      if (!mounted) return;
+
+      setState(() {
+        todaySessions = [];
+        punchInTime = "--:--";
+        punchOutTime = "--:--";
+        status = "Weekly Off";
+        workingHours = "—";
+        dayType = null;
+        dayTypeLabel = null;
+        lastAddress = null;
+        lastLat = null;
+        lastLng = null;
+        useWfhForNextPunch = false;
+      });
+      return;
+    }
+
     try {
       final date =
           getDateKey();
@@ -603,6 +760,11 @@ class _PunchCardState extends State<PunchCard> {
   // ===========================================================================
 
   Future<void> _requestWfh() async {
+    if (_isWeekend(DateTime.now())) {
+      _showMessage("Saturday and Sunday are weekly off days.");
+      return;
+    }
+
     final date =
         getDateKey();
 
@@ -677,6 +839,11 @@ class _PunchCardState extends State<PunchCard> {
   // ===========================================================================
 
   Future<void> punchIn() async {
+    if (_isWeekend(DateTime.now())) {
+      _showMessage("Saturday and Sunday are weekly off days.");
+      return;
+    }
+
     if (isSubmitting) return;
 
     // ---------------------------------------------------------------
@@ -705,31 +872,39 @@ class _PunchCardState extends State<PunchCard> {
     final wfhApproved =
         wfhStatusToday ==
             "approved";
+    final punchAsWfh = wfhApproved && useWfhForNextPunch;
 
-    // ---------------------------------------------------------------
-    // LOCATION
-    // ---------------------------------------------------------------
-
-    if (currentLocation == null ||
-        locationStatus !=
-            LocationStatus.granted) {
-      await _refreshLocation();
-
-      if (!mounted) return;
-
-      if (currentLocation == null ||
-          locationStatus !=
-              LocationStatus.granted) {
-        _showMessage(
-          "Unable to get your current location. Please enable location permission and try again.",
-        );
-        return;
-      }
-    }
-
+    // Lock immediately on the first tap, before GPS refresh.
+    // This prevents repeated taps while location lookup is in progress.
     setState(() {
       isSubmitting = true;
     });
+
+    // ---------------------------------------------------------------
+    // FRESH LOCATION
+    // ---------------------------------------------------------------
+    // Always refresh immediately before a punch so the saved GPS data
+    // represents the actual punch location, not an older cached position.
+    await _refreshLocation();
+
+    if (!mounted) return;
+
+    final location = currentLocation;
+
+    if (location == null ||
+        locationStatus !=
+            LocationStatus.granted) {
+      if (mounted) {
+        setState(() {
+          isSubmitting = false;
+        });
+      }
+
+      _showMessage(
+        "Unable to get your current location. Please enable location permission and try again.",
+      );
+      return;
+    }
 
     final date =
         getDateKey();
@@ -737,9 +912,6 @@ class _PunchCardState extends State<PunchCard> {
     final time =
         TimeOfDay.now()
             .format(context);
-
-    final location =
-        currentLocation;
 
     final dayRef =
         attendanceRef
@@ -831,16 +1003,17 @@ class _PunchCardState extends State<PunchCard> {
           sessions.add({
             "punchIn": time,
             "punchOut": null,
+            "workFromHome": punchAsWfh,
+            "workLocationType":
+                punchAsWfh
+                    ? "Work From Home"
+                    : "Office",
             "punchInLat":
-                location?.latitude,
+                location.latitude,
             "punchInLng":
-                location?.longitude,
+                location.longitude,
             "punchInAddress":
-                location == null
-                    ? null
-                    : (wfhApproved
-                        ? "Work From Home — ${location.address}"
-                        : location.address),
+                location.address,
           });
 
           data["employeeId"] =
@@ -864,9 +1037,10 @@ class _PunchCardState extends State<PunchCard> {
 
           // Keep WFH if already true,
           // or use today's approved WFH.
+          // Office is the default. WFH can only become active when
+          // today's request has been approved by an admin.
           data["workFromHome"] =
-              data["workFromHome"] == true ||
-                  wfhApproved;
+              punchAsWfh;
 
           // ---------------------------------------------------------
           // SAVE ALL SESSIONS
@@ -879,18 +1053,14 @@ class _PunchCardState extends State<PunchCard> {
           // CURRENT PUNCH-IN LOCATION
           // ---------------------------------------------------------
 
-          if (location != null) {
-            data["punchInLat"] =
-                location.latitude;
+          data["punchInLat"] =
+              location.latitude;
 
-            data["punchInLng"] =
-                location.longitude;
+          data["punchInLng"] =
+              location.longitude;
 
-            data["punchInAddress"] =
-                wfhApproved
-                    ? "Work From Home — ${location.address}"
-                    : location.address;
-          }
+          data["punchInAddress"] =
+              location.address;
 
           // ---------------------------------------------------------
           // CLEAR TEMPORARY MIS-PUNCH FIELDS
@@ -957,18 +1127,18 @@ class _PunchCardState extends State<PunchCard> {
         status =
             "Checked In";
 
-        isWorkFromHome =
-            isWorkFromHome ||
-                wfhApproved;
+        isWorkFromHome = punchAsWfh;
+
+        useWfhForNextPunch = false;
 
         lastAddress =
-            location?.address;
+            location.address;
 
         lastLat =
-            location?.latitude;
+            location.latitude;
 
         lastLng =
-            location?.longitude;
+            location.longitude;
 
         dayType = null;
         dayTypeLabel = null;
@@ -1000,6 +1170,11 @@ class _PunchCardState extends State<PunchCard> {
   // ===========================================================================
 
   Future<void> punchOut() async {
+    if (_isWeekend(DateTime.now())) {
+      _showMessage("Saturday and Sunday are weekly off days.");
+      return;
+    }
+
     if (isSubmitting) return;
 
     // ---------------------------------------------------------------
@@ -1026,30 +1201,37 @@ class _PunchCardState extends State<PunchCard> {
       return;
     }
 
+    // Lock immediately on the first tap, before GPS refresh.
+    // This prevents repeated taps while location lookup is in progress.
+    setState(() {
+      isSubmitting = true;
+    });
+
     // ---------------------------------------------------------------
     // LOCATION
     // ---------------------------------------------------------------
 
-    if (currentLocation == null ||
+    // Always capture a fresh GPS position at punch-out as well.
+    await _refreshLocation();
+
+    if (!mounted) return;
+
+    final location = currentLocation;
+
+    if (location == null ||
         locationStatus !=
             LocationStatus.granted) {
-      await _refreshLocation();
-
-      if (!mounted) return;
-
-      if (currentLocation == null ||
-          locationStatus !=
-              LocationStatus.granted) {
-        _showMessage(
-          "Unable to get your current location. Please enable location permission and try again.",
-        );
-        return;
+      if (mounted) {
+        setState(() {
+          isSubmitting = false;
+        });
       }
-    }
 
-    setState(() {
-      isSubmitting = true;
-    });
+      _showMessage(
+        "Unable to get your current location. Please enable location permission and try again.",
+      );
+      return;
+    }
 
     final date =
         getDateKey();
@@ -1057,9 +1239,6 @@ class _PunchCardState extends State<PunchCard> {
     final time =
         TimeOfDay.now()
             .format(context);
-
-    final location =
-        currentLocation;
 
     final dayRef =
         attendanceRef
@@ -1177,19 +1356,22 @@ class _PunchCardState extends State<PunchCard> {
           openSession["punchOut"] =
               time;
 
-          if (location != null) {
-            openSession["punchOutLat"] =
-                location.latitude;
+          openSession["punchOutLat"] =
+              location.latitude;
 
-            openSession["punchOutLng"] =
-                location.longitude;
+          openSession["punchOutLng"] =
+              location.longitude;
 
-            openSession["punchOutAddress"] =
-                data["workFromHome"] ==
-                        true
-                    ? "Work From Home — ${location.address}"
-                    : location.address;
-          }
+          openSession["punchOutAddress"] =
+              location.address;
+
+          openSession["workFromHome"] =
+              openSession["workFromHome"] == true;
+
+          openSession["workLocationType"] =
+              openSession["workFromHome"] == true
+                  ? "Work From Home"
+                  : "Office";
 
           // ---------------------------------------------------------
           // CALCULATE ENTIRE DAY
@@ -1279,19 +1461,14 @@ class _PunchCardState extends State<PunchCard> {
           // TOP-LEVEL CHECKOUT LOCATION
           // ---------------------------------------------------------
 
-          if (location != null) {
-            data["punchOutLat"] =
-                location.latitude;
+          data["punchOutLat"] =
+              location.latitude;
 
-            data["punchOutLng"] =
-                location.longitude;
+          data["punchOutLng"] =
+              location.longitude;
 
-            data["punchOutAddress"] =
-                data["workFromHome"] ==
-                        true
-                    ? "Work From Home — ${location.address}"
-                    : location.address;
-          }
+          data["punchOutAddress"] =
+              location.address;
 
           // ---------------------------------------------------------
           // REMOVE TEMPORARY STATES
@@ -1658,6 +1835,10 @@ class _PunchCardState extends State<PunchCard> {
   // ===========================================================================
 
   Widget _wfhSection() {
+    if (_isWeekend(DateTime.now())) {
+      return const SizedBox.shrink();
+    }
+
     if (!widget.showWfhButton) {
       return const SizedBox.shrink();
     }
@@ -1670,38 +1851,48 @@ class _PunchCardState extends State<PunchCard> {
     if (wfhStatusToday ==
         "approved") {
       return Container(
-        padding:
-            const EdgeInsets.symmetric(
-          horizontal: 12,
-          vertical: 8,
+        padding: const EdgeInsets.fromLTRB(12, 9, 12, 9),
+        margin: const EdgeInsets.only(bottom: 10),
+        decoration: BoxDecoration(
+          color: AppColors.success.withValues(alpha: 0.25),
+          borderRadius: BorderRadius.circular(12),
         ),
-        margin:
-            const EdgeInsets.only(
-          bottom: 10,
-        ),
-        decoration:
-            BoxDecoration(
-          color: AppColors.success
-              .withOpacity(0.25),
-          borderRadius:
-              BorderRadius.circular(12),
-        ),
-        child: const Row(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(
-              Icons.home_work,
-              color: Colors.white,
-              size: 18,
-            ),
-            SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                "Work From Home approved for today",
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 12,
+            const Row(
+              children: [
+                Icon(Icons.verified_outlined, color: Colors.white, size: 18),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    "WFH approved — choose where you will punch in",
+                    style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700),
+                  ),
                 ),
-              ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: _locationChoice(
+                    icon: Icons.apartment_outlined,
+                    label: "Office",
+                    selected: !useWfhForNextPunch,
+                    onTap: () => setState(() => useWfhForNextPunch = false),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _locationChoice(
+                    icon: Icons.home_work_outlined,
+                    label: "WFH",
+                    selected: useWfhForNextPunch,
+                    onTap: () => setState(() => useWfhForNextPunch = true),
+                  ),
+                ),
+              ],
             ),
           ],
         ),
@@ -1723,7 +1914,7 @@ class _PunchCardState extends State<PunchCard> {
         decoration:
             BoxDecoration(
           color: AppColors.warning
-              .withOpacity(0.25),
+              .withValues(alpha: 0.25),
           borderRadius:
               BorderRadius.circular(12),
         ),
@@ -1764,7 +1955,7 @@ class _PunchCardState extends State<PunchCard> {
         decoration:
             BoxDecoration(
           color: AppColors.danger
-              .withOpacity(0.25),
+              .withValues(alpha: 0.25),
           borderRadius:
               BorderRadius.circular(12),
         ),
@@ -1820,6 +2011,35 @@ class _PunchCardState extends State<PunchCard> {
   // ===========================================================================
   // LOCATION BANNER
   // ===========================================================================
+
+  Widget _locationChoice({
+    required IconData icon,
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        decoration: BoxDecoration(
+          color: selected ? Colors.white.withValues(alpha: 0.18) : Colors.white.withValues(alpha: 0.06),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: selected ? Colors.white70 : Colors.white24),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 15, color: Colors.white),
+            const SizedBox(width: 5),
+            Text(label, style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w800)),
+          ],
+        ),
+      ),
+    );
+  }
 
   Widget _locationBanner() {
     switch (locationStatus) {
@@ -1912,7 +2132,7 @@ class _PunchCardState extends State<PunchCard> {
       decoration:
           BoxDecoration(
         color:
-            color.withOpacity(0.15),
+            color.withValues(alpha: 0.15),
         borderRadius:
             BorderRadius.circular(12),
       ),
@@ -1963,9 +2183,12 @@ class _PunchCardState extends State<PunchCard> {
                 LocationStatus.granted &&
             currentLocation != null;
 
+    final isWeekend = _isWeekend(DateTime.now());
+
     final canAct =
         !isSubmitting &&
-        canPunch;
+        canPunch &&
+        !isWeekend;
 
     return SizedBox(
       width: double.infinity,
@@ -1980,12 +2203,10 @@ class _PunchCardState extends State<PunchCard> {
           backgroundColor:
               !canAct
                   ? Colors.white
-                      .withOpacity(
+                      .withValues(alpha: 
                     0.2,
                   )
-                  : (checkedIn
-                      ? AppColors.danger
-                      : AppColors.success),
+                  : Colors.white,
           shape:
               RoundedRectangleBorder(
             borderRadius:
@@ -2025,20 +2246,30 @@ class _PunchCardState extends State<PunchCard> {
                             ? Icons.logout
                             : Icons.login,
                         color:
-                            Colors.white,
+                            !canAct
+                                ? Colors.white
+                                : (checkedIn
+                                    ? AppColors.danger
+                                    : AppColors.primary),
                         size: 18,
                       ),
                       const SizedBox(
                         width: 8,
                       ),
                       Text(
-                        checkedIn
-                            ? "Check Out"
-                            : "Check In",
+                        isWeekend
+                            ? "Weekly Off"
+                            : (checkedIn
+                                ? "Check Out"
+                                : "Check In"),
                         style:
-                            const TextStyle(
+                            TextStyle(
                           color:
-                              Colors.white,
+                              !canAct
+                                  ? Colors.white
+                                  : (checkedIn
+                                      ? AppColors.danger
+                                      : AppColors.primary),
                           fontWeight:
                               FontWeight
                                   .bold,
@@ -2108,7 +2339,7 @@ class _PunchCardState extends State<PunchCard> {
                     color:
                         AppColors
                             .primary
-                            .withOpacity(
+                            .withValues(alpha: 
                       0.15,
                     ),
                     borderColor:
@@ -2188,8 +2419,7 @@ class _PunchCardState extends State<PunchCard> {
           const EdgeInsets.all(18),
       decoration:
           BoxDecoration(
-        gradient:
-            AppGradients.punchCard,
+        gradient: AppGradients.punchCard,
         borderRadius:
             BorderRadius.circular(
           20,
@@ -2251,7 +2481,7 @@ class _PunchCardState extends State<PunchCard> {
                       BoxDecoration(
                     color:
                         _dayTypeColor()
-                            .withOpacity(
+                            .withValues(alpha: 
                       0.25,
                     ),
                     borderRadius:
@@ -2277,86 +2507,62 @@ class _PunchCardState extends State<PunchCard> {
             ],
           ),
 
-          if (isWorkFromHome &&
-              status !=
-                  "Not Checked In") ...[
-            const SizedBox(
-              height: 6,
-            ),
-            const Row(
-              children: [
-                Icon(
-                  Icons
-                      .home_work_outlined,
-                  size: 14,
-                  color:
-                      Colors.white70,
-                ),
-                SizedBox(
-                  width: 4,
-                ),
-                Text(
-                  "Work From Home",
-                  style:
-                      TextStyle(
-                    color:
-                        Colors.white70,
-                    fontSize: 12,
+          if (todaySessions.isNotEmpty &&
+              status != "Not Checked In") ...[
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: InkWell(
+                onTap: _showCurrentWorkLocation,
+                borderRadius: BorderRadius.circular(18),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
                   ),
-                ),
-              ],
-            ),
-          ] else if (lastAddress !=
-              null) ...[
-            const SizedBox(
-              height: 6,
-            ),
-            Row(
-              children: [
-                const Icon(
-                  Icons.location_on,
-                  size: 14,
-                  color:
-                      Colors.white70,
-                ),
-                const SizedBox(
-                  width: 4,
-                ),
-                Expanded(
-                  child:
-                      Text(
-                    lastAddress!,
-                    style:
-                        const TextStyle(
-                      color:
-                          Colors.white70,
-                      fontSize: 12,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.14),
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.28),
                     ),
-                    overflow:
-                        TextOverflow
-                            .ellipsis,
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        isWorkFromHome
+                            ? Icons.home_work_outlined
+                            : Icons.business_outlined,
+                        size: 14,
+                        color: Colors.white,
+                      ),
+                      const SizedBox(width: 5),
+                      Text(
+                        isWorkFromHome ? "WFH session" : "Office session",
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      const Icon(
+                        Icons.info_outline_rounded,
+                        size: 13,
+                        color: Colors.white70,
+                      ),
+                    ],
                   ),
                 ),
-              ],
+              ),
             ),
           ],
-
           const SizedBox(
             height: 12,
           ),
 
           _wfhSection(),
-
-          if (!wfhApproved)
-            _locationBanner(),
-
-          if (!widget.compact &&
-              !wfhApproved) ...[
-            const SizedBox(
-              height: 12,
-            ),
-            _mapPreview(),
-          ],
 
           const SizedBox(
             height: 14,
@@ -2379,7 +2585,7 @@ class _PunchCardState extends State<PunchCard> {
               decoration:
                   BoxDecoration(
                 color: Colors.white
-                    .withOpacity(
+                    .withValues(alpha: 
                   0.15,
                 ),
                 borderRadius:

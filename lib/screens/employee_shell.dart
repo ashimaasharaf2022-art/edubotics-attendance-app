@@ -4,10 +4,9 @@ import 'package:firebase_database/firebase_database.dart';
 
 import '../utils/app_colors.dart';
 import 'dashboard_screen.dart';
-import 'history_screen.dart';
-import 'personal_report_screen.dart';
+import 'attendance_tab_screen.dart';
+import 'services_screen.dart';
 import 'profile_screen.dart';
-import 'admin_message_screen.dart';
 import 'admin_shell.dart';
 
 class EmployeeShell extends StatefulWidget {
@@ -122,6 +121,18 @@ class _EmployeeShellState extends State<EmployeeShell> {
   }
 
   // ============================================================
+  // ACTIVE EMPLOYEE TAB
+  // ============================================================
+
+  Widget _buildActiveTab(List<Widget> tabs) {
+    // Only mount the visible employee screen. This is intentional: hidden
+    // screens are not simultaneously inserted into the widget tree, so a
+    // GlobalKey owned by a child screen cannot collide with another hidden
+    // instance. Flutter requires GlobalKeys to be unique across the tree.
+    return tabs[currentIndex];
+  }
+
+  // ============================================================
   // BUILD
   // ============================================================
 
@@ -142,20 +153,20 @@ class _EmployeeShellState extends State<EmployeeShell> {
       ),
 
       // --------------------------------------------------------
-      // ATTENDANCE HISTORY
+      // ATTENDANCE
       // --------------------------------------------------------
 
-      HistoryScreen(
+      AttendanceTabScreen(
         employeeId: widget.employeeId,
-        employeeName: displayName,
       ),
 
       // --------------------------------------------------------
-      // PERSONAL REPORT
+      // SERVICES
       // --------------------------------------------------------
 
-      PersonalReportScreen(
+      ServicesScreen(
         employeeId: widget.employeeId,
+        employeeName: displayName,
       ),
 
       // --------------------------------------------------------
@@ -190,41 +201,7 @@ class _EmployeeShellState extends State<EmployeeShell> {
         );
       },
       child: Scaffold(
-        body: IndexedStack(
-          index: currentIndex,
-          children: tabs,
-        ),
-
-      // ========================================================
-      // SUPPORT / REQUEST BUTTON
-      // ========================================================
-
-      floatingActionButton:
-          FloatingActionButton(
-        backgroundColor: AppColors.primary,
-        foregroundColor: Colors.white,
-        onPressed: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) =>
-                  SupportRequestScreen(
-                employeeId:
-                    widget.employeeId,
-                employeeName:
-                    displayName,
-              ),
-            ),
-          );
-        },
-        child: const Icon(
-          Icons.add,
-        ),
-      ),
-
-      floatingActionButtonLocation:
-          FloatingActionButtonLocation
-              .centerDocked,
+        body: _buildActiveTab(tabs),
 
       // ========================================================
       // BOTTOM NAVIGATION
@@ -246,7 +223,7 @@ class _EmployeeShellState extends State<EmployeeShell> {
 
         indicatorColor:
             AppColors.primary
-                .withOpacity(0.15),
+                .withValues(alpha: 0.15),
 
         destinations: const [
           NavigationDestination(
@@ -275,14 +252,14 @@ class _EmployeeShellState extends State<EmployeeShell> {
 
           NavigationDestination(
             icon: Icon(
-              Icons.description_outlined,
+              Icons.grid_view_rounded,
             ),
             selectedIcon: Icon(
-              Icons.description,
+              Icons.grid_view_rounded,
               color:
                   AppColors.primary,
             ),
-            label: "Reports",
+            label: "Services",
           ),
 
           NavigationDestination(

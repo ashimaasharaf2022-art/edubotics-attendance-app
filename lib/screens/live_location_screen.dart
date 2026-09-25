@@ -71,7 +71,7 @@ class _LiveLocationScreenState extends State<LiveLocationScreen> {
                         point: const LatLng(AppConstants.officeLat, AppConstants.officeLng),
                         radius: AppConstants.officeRadiusMeters,
                         useRadiusInMeter: true,
-                        color: AppColors.primary.withOpacity(0.15),
+                        color: AppColors.primary.withValues(alpha: 0.15),
                         borderColor: AppColors.primary,
                         borderStrokeWidth: 1.5,
                       ),

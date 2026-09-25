@@ -80,7 +80,7 @@ class _AnnouncementDetailScreenState extends State<AnnouncementDetailScreen> {
                           if (progress == null) return child;
                           return const Center(child: CircularProgressIndicator(color: Colors.white));
                         },
-                        errorBuilder: (_, __, ___) => Container(
+                        errorBuilder: (_, _, _) => Container(
                           padding: const EdgeInsets.all(20),
                           color: Colors.black87,
                           child: const Text("Failed to load image", style: TextStyle(color: Colors.white)),
@@ -136,7 +136,7 @@ class _AnnouncementDetailScreenState extends State<AnnouncementDetailScreen> {
                               child: const Center(child: CircularProgressIndicator()),
                             );
                           },
-                          errorBuilder: (_, __, ___) => Container(
+                          errorBuilder: (_, _, _) => Container(
                             height: 100,
                             color: AppColors.background,
                             child: const Center(
@@ -157,7 +157,7 @@ class _AnnouncementDetailScreenState extends State<AnnouncementDetailScreen> {
                 margin: const EdgeInsets.all(8),
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.6),
+                  color: Colors.black.withValues(alpha: 0.6),
                   borderRadius: BorderRadius.circular(20),
                 ),
                 child: const Row(
@@ -182,14 +182,14 @@ class _AnnouncementDetailScreenState extends State<AnnouncementDetailScreen> {
       decoration: BoxDecoration(
         color: AppColors.background,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.primary.withOpacity(0.2)),
+        border: Border.all(color: AppColors.primary.withValues(alpha: 0.2)),
       ),
       child: Row(
         children: [
           Container(
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
-              color: AppColors.primary.withOpacity(0.12),
+              color: AppColors.primary.withValues(alpha: 0.12),
               borderRadius: BorderRadius.circular(8),
             ),
             child: const Icon(Icons.insert_drive_file, color: AppColors.primary, size: 20),

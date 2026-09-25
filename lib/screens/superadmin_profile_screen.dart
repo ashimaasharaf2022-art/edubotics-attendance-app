@@ -301,7 +301,7 @@ class _SuperAdminProfileScreenState
               child: CircleAvatar(
                 radius: 46,
                 backgroundColor:
-                    AppColors.primary.withOpacity(.12),
+                    AppColors.primary.withValues(alpha: .12),
 
                 child: const Icon(
                   Icons.verified_user_rounded,

@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:firebase_core/firebase_core.dart';
 
 import 'firebase_options.dart';
@@ -8,12 +9,19 @@ import 'screens/employee_shell.dart';
 import 'screens/admin_shell.dart';
 import 'screens/superadmin_shell.dart';
 import 'utils/session_manager.dart';
+import 'utils/workora_app_settings.dart';
 import 'utils/notification_helper.dart';
-import 'utils/app_colors.dart';
+import 'theme/app_theme.dart';
 
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  try {
+    await WorkoraAppSettings.load();
+  } catch (e) {
+    debugPrint("APP SETTINGS LOAD ERROR: $e");
+  }
 
   try {
     await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
@@ -35,42 +43,88 @@ Future<void> main() async {
   runApp(const AttendanceApp());
 }
 
-class AttendanceApp extends StatelessWidget {
+class AttendanceApp extends StatefulWidget {
   const AttendanceApp({super.key});
+
+  @override
+  State<AttendanceApp> createState() => _AttendanceAppState();
+}
+
+class _AttendanceAppState extends State<AttendanceApp> {
+  @override
+  void initState() {
+    super.initState();
+    WorkoraAppSettings.isDarkMode.addListener(_onSettingsChanged);
+    WorkoraAppSettings.locale.addListener(_onSettingsChanged);
+  }
+
+  @override
+  void dispose() {
+    WorkoraAppSettings.isDarkMode.removeListener(_onSettingsChanged);
+    WorkoraAppSettings.locale.removeListener(_onSettingsChanged);
+    super.dispose();
+  }
+
+  void _onSettingsChanged() {
+    if (mounted) setState(() {});
+  }
+
+  ThemeData _darkTheme() {
+    final base = AppTheme.lightTheme;
+
+    return base.copyWith(
+      brightness: Brightness.dark,
+      scaffoldBackgroundColor: const Color(0xFF0B1713),
+      canvasColor: const Color(0xFF0B1713),
+      cardColor: const Color(0xFF14251F),
+      colorScheme: base.colorScheme.copyWith(
+        brightness: Brightness.dark,
+        surface: const Color(0xFF14251F),
+        onSurface: Colors.white,
+        surfaceContainerHighest: const Color(0xFF20342D),
+        onSurfaceVariant: const Color(0xFFB7C6C0),
+      ),
+      appBarTheme: base.appBarTheme.copyWith(
+        backgroundColor: const Color(0xFF0F1F1A),
+        foregroundColor: Colors.white,
+      ),
+      bottomNavigationBarTheme: base.bottomNavigationBarTheme.copyWith(
+        backgroundColor: const Color(0xFF0F1F1A),
+      ),
+      dialogTheme: base.dialogTheme.copyWith(
+        backgroundColor: const Color(0xFF14251F),
+      ),
+      snackBarTheme: base.snackBarTheme.copyWith(
+        backgroundColor: const Color(0xFF20342D),
+        contentTextStyle: const TextStyle(color: Colors.white),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: "Workora",
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: AppColors.primary,
-          primary: AppColors.primary,
-          secondary: AppColors.green,
-          surface: AppColors.surface,
-        ),
-        scaffoldBackgroundColor: AppColors.background,
-        appBarTheme: const AppBarTheme(
-          backgroundColor: AppColors.primary,
-          foregroundColor: Colors.white,
-          elevation: 0,
-        ),
-        inputDecorationTheme: InputDecorationTheme(
-          filled: true,
-          fillColor: Colors.white,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 17),
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: AppColors.divider)),
-          enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: AppColors.divider)),
-          focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: AppColors.primary, width: 1.5)),
-        ),
-      ),
+      theme: AppTheme.lightTheme,
+      darkTheme: _darkTheme(),
+      themeMode: WorkoraAppSettings.isDarkMode.value
+          ? ThemeMode.dark
+          : ThemeMode.light,
+      locale: WorkoraAppSettings.locale.value,
+      supportedLocales: const [
+        Locale('en', 'IN'),
+        Locale('ml', 'IN'),
+        Locale('hi', 'IN'),
+        Locale('ta', 'IN'),
+      ],
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
       home: const SessionGate(),
       builder: (context, child) {
-        // Use one app text scale on Android so cards, action buttons and
-        // tab labels retain the same layout on devices with different system
-        // font-size settings.
         final mediaQuery = MediaQuery.of(context);
         return MediaQuery(
           data: mediaQuery.copyWith(textScaler: TextScaler.noScaling),

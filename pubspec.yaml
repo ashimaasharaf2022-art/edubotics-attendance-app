@@ -1,4 +1,5 @@
 name: workora
+
 description: Workora attendance app
 
 publish_to: 'none'
@@ -11,17 +12,19 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-
+  flutter_localizations:
+    sdk: flutter
   cupertino_icons: ^1.0.8
+  responsive_framework: ^1.5.1
   firebase_core: ^4.11.0
   cloud_firestore: ^6.6.0
   firebase_auth: ^6.5.4
   firebase_database: ^12.4.4
   firebase_storage: ^13.0.4
-  intl: ^0.19.0
+  intl: ^0.20.2
   shared_preferences: ^2.3.3
   image_picker: ^1.1.2
-  file_picker: ^8.1.7
+  file_picker: ^9.2.3
   url_launcher: ^6.3.1
   fl_chart: ^0.69.2
   pdf: ^3.11.1
@@ -37,6 +40,7 @@ dependencies:
   device_info_plus: ^11.2.0
   http: ^1.2.2
   ntp: ^2.0.0
+  google_fonts: ^8.2.1
 
 dev_dependencies:
   flutter_test:
@@ -53,8 +57,7 @@ flutter_launcher_icons:
 
 flutter:
   uses-material-design: true
-
   assets:
-    - assets/images/logo.jpeg
+    - assets/images/workora_text.png
     - assets/images/workora_logo.png
     - assets/icons/
